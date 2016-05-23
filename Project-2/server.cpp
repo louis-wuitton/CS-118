@@ -12,34 +12,79 @@
 #include <errno.h>
 #include <unistd.h>
 #include <string.h>
+#include <vector>
+#include <sstream>
+#include <fstream>
 #include "packet.h"
 
+//defining flags and useful numbers
+#define SYN 0x4;
+#define ACK 0x2;
+#define FIN 0x1;
+#define SYNACK 0x6;
+#define FINACK 0x3;
+
+// defining states and corresponding numbers
+#define NO_CONNECTION 30;
+#define SYNACK_SENT 31;
+#define CONNECTED 32;
+#define SENT_FIN 33;
 
 using namespace std;
 
+
+// random number generator: used to generate initial sequence number
+uint16_t genRandom()
+{
+   return rand()%50;
+}
+
+class FileReader
+{
+public:
+    Segment top();
+    void pop();
+    bool hasMore();
+private:
+    
+};
+
+class OutputBuffer
+{
+public:
+    void setInitSeq(uint16_t seqNo)
+    {
+        ini_seq_s = seqNo;
+    }
+    void ack(uint16_t ackNo);
+    void timeout();
+    bool hasSpace(uint16_t size = 1024);
+    void insert(Segment seg);
+    uint16_t nextSegSeq();
+    Segment getSeg(uint16_t seqNo);
+    uint16_t getSeqNo()
+    {
+        return ini_seq_s;
+    }
+private:
+    vector<HeaderPacket> m_segments_s;
+    uint16_t ini_seq_s;
+};
+
 int main(int argc, char* argv[])
 {
+    // Check for correct number of arguments
     if(argc != 3)
     {
         cerr << "Invalid number of arguments"<<std::endl;
         return 1;
     }
-    //creating an UDP socket
     
-    fd_set readFds;
-    fd_set writeFds;
-    fd_set errFds;
-    fd_set watchFds;
-    FD_ZERO(&readFds);
-    FD_ZERO(&writeFds);
-    FD_ZERO(&errFds);
-    FD_ZERO(&watchFds);
-    
-    
+    // set up UDP socket, including BINDING hints, IP, and port number
     int sockfd;
-    if ((sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
+    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) == -1) {
         perror("Can't create socket");
-        return 1;
+        exit(-1);
     }
     
     int maxSockfd = sockfd;
@@ -49,14 +94,14 @@ int main(int argc, char* argv[])
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET; // IPv4
     hints.ai_socktype = SOCK_DGRAM;
-    
+
     int portno = atoi(argv[1]);
     cout << "port number is " << portno<<endl;
     
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
     addr.sin_port = htons(portno);     // short, network byte order
-    addr.sin_addr.s_addr = 0; //inet_addr("10.0.0.1");
+    addr.sin_addr.s_addr = inet_addr("10.0.0.1");
     memset(addr.sin_zero, '\0', sizeof(addr.sin_zero));
     
     
@@ -65,21 +110,58 @@ int main(int argc, char* argv[])
         return 2;
     }
     
-    HeaderPacket req_pkt;
-    
-    struct sockaddr_in remote_addr;
-    socklen_t addrlen = sizeof(remote_addr);
-    
+    // handle initial SYN request
+    // placed this outside event loop because it would be hard to start up
+        // the server and the client within the 500ms timeout window otherwise
+    HeaderPacket req_pkt_syn;
+    int clilen = 0;
     struct sockaddr_in clientAddr;
-    int clilen = sizeof(clientAddr);
-    char ipstr[INET_ADDRSTRLEN] = {'\0'};
-    inet_ntop(clientAddr.sin_family, &clientAddr.sin_addr, ipstr, sizeof(ipstr));
-    std::cout << "Accept a connection from: " << ipstr << ":" <<
-    ntohs(clientAddr.sin_port) << std::endl;
+    OutputBuffer out_buf;
+    uint16_t state = NO_CONNECTION;
+    
+    if(recvfrom(sockfd, &req_pkt_syn, sizeof(req_pkt_syn), 0, (struct sockaddr*) &clientAddr, (socklen_t*) &clilen) < 0)
+    {
+        cerr << "recvfrom failed" << endl;
+        return 1;
+    }
+    else if (req_pkt_syn)
+    {
+        state = SYNACK_SENT;
+        uint16_t initseq = genRandom();
+        out_buf.setInitSeq(initseq);
+        
+        // sending out SYNACK packet
+        HeaderPacket resp_pkt_synack;
+        resp_pkt_synack.m_seq = htons(out_buf.getSeqNo());
+        resp_pkt_synack.m_ack = 0;
+        resp_pkt_synack.m_flags = htons(0x6); //SYNACK flag
+        resp_pkt_synack.m_window = htons(RECV_WINDOW);
+        if(sendto(sockfd, &resp_pkt_synack, sizeof(resp_pkt_synack), 0, (struct sockaddr*) &clientAddr, (socklen_t*) &clilen)<0)
+        {
+            cerr << "Sendto fails" << endl;
+            return 1;
+        }
+    }
+
     
     
-    while (true) {
+    // getting ready to receive from client, set up event loop
+    // setting up sets for select() call
+    fd_set readFds;
+    fd_set writeFds;
+    fd_set errFds;
+    fd_set watchFds;
+    FD_ZERO(&readFds);
+    FD_ZERO(&writeFds);
+    FD_ZERO(&errFds);
+    FD_ZERO(&watchFds);
+
+    
+    
+    while (true) { // event loop
+        // setting up select() call
         int nReadyFds = 0;
+        errFds = watchFds;
         if(!FD_ISSET(sockfd, &watchFds))
             FD_SET(sockfd, &watchFds);
         if(!FD_ISSET(sockfd, &readFds))
@@ -88,34 +170,95 @@ int main(int argc, char* argv[])
             perror("select");
             return 4;
         }
-        errFds = watchFds;
-        if (nReadyFds == 0) {
+        
+        
+        if (nReadyFds == 0) { // CASE TIMEOUT
             std::cout << "no data is received" << std::endl;
             //handle the timeout
             break;
         }
         else
         {
-            cout <<"Select received something" <<endl;
             for(int fd = 0; fd <= maxSockfd; fd++){
-                if (FD_ISSET(fd, &readFds)) {
+                if (FD_ISSET(fd, &readFds)) // reading, recvfrom cases
+                {
                     cout << "Read something "<< endl;
                     HeaderPacket req_pkt;
-                    int clilen;
-                    struct sockaddr_in clientAddr;
                     if(recvfrom(fd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr*) &clientAddr, (socklen_t*) &clilen) < 0)
                     {
-                        cerr<<"recvfrom failed" <<endl;
+                        cerr << "recvfrom failed" << endl;
                         return 1;
                     }
-                    char ipstr[INET_ADDRSTRLEN] = {'\0'};
-                    inet_ntop(clientAddr.sin_family, &clientAddr.sin_addr, ipstr, sizeof(ipstr));
-                    std::cout << "Accept a connection from: " << ipstr << ":" <<
-                    ntohs(clientAddr.sin_port) << std::endl;
+                    else
+                    {
+                        switch(req_pkt.m_flags)
+                        {
+                            
+                            case ACK:
+                            {
+                                
+                            }
+                            default:
+                        }
+                    }
+                    cout<<"The packet has a sequence number "<<req_pkt.m_seq <<endl;
+                    cout<<"The packet has flag " << req_pkt.m_flags << endl;
                     
+                    FD_CLR(fd, &readFDs);
+                    FD_SET(fd, &writeFDs);
                 }
-            }
-        }
-    }
+                
+                else if(FD_ISSET(fd, &writeFDs) // writing, sendto cases
+                {
+                    HeaderPacket res_pkt;
+                    res_pkt.m_window = req_pkt.m_window;
+                    res_pkt.m_ack = req_pkt.m_seq + 1;
+                    if(req_pkt.m_ack == 0)
+                    {
+                        res_pkt.m_seq = genRandom();
+                        res_pkt.m_flags |= 0x4;
+                        res_pkt.m_flags |= 0x2;
+                    }
+                    else
+                    {
+                        res_pkt.m_seq = req_pkt.m_ack;
+                        if(startfin)
+                        {
+                            res_pkt.m_flags|=0x1;
+                        }
+                        else
+                        {
+                            res_pkt.m_flags |= 0x2;
+                            ifstream file;
+                            file.exception(ifstream::badbit | ifstream::eofbit);
+                            file.open(argv[2], ifstream::in| ifstream::binary | ifstream::out);
+                            if(!file.is_open())
+                            {
+                                cerr<<"File does not exist"<<endl;
+                                return 1;
+                            }
+                            else
+                            {
+                                file.seekg(0, ios::end);
+                                streampos length(file.tellg());
+                                if(length){
+                                    file.seekg(0, ios::beg);
+                                    file.read(res_pkt.payload, static_cast<size_t>(length));
+                                }
+                                file.close();
+                            }
+                        }
+                        if(sendto(fd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr *)&clientAddr, (socklen_t*)clilen)< 0)
+                        {
+                            cerr << "sendto failed" << endl;
+                            return 1;
+                        }
+
+                    }
+		   
+                } // closing brace for elseif writing, sendto cases
+            } // closing brace for for loop, non-timeout cases
+        } // closing brace for else, non-timeout cases
+    } //closing brace for while loop, event loop
     
-}
+} // closing brace for main function
