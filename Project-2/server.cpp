@@ -304,7 +304,19 @@ int main(int argc, char* argv[])
                             
                             case ACK:
                             {
-                                
+                                // check the state
+                                if (state == SYNACK_SENT)
+                                {
+                                	state = CONNECTED;
+                                }
+                                else if (state == SENT_FIN)
+                                {
+                                	
+                                }
+                                else if (state == CONNECTED)
+                                {
+                                	
+                                }
                             }
                             default:
                         }
