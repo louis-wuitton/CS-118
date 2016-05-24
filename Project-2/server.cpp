@@ -23,6 +23,7 @@
 #define FIN 0x1;
 #define SYNACK 0x6;
 #define FINACK 0x3;
+#define MAX_NO_TIMEOUTS 3;
 
 // defining states and corresponding numbers
 #define NO_CONNECTION 30;
@@ -54,10 +55,11 @@ class OutputBuffer
 public:
     void setup()
     {
-        cong_window_size = 1;
-        pkts_in_window = 0;
+        cong_window_size = 1024;
+        cur_cong_window = 0;
         window_begin = 0;
         window_end = 0;
+        no_timeouts = 0;
     }
     void setInitSeq(uint16_t seqNo)
     {
@@ -70,26 +72,42 @@ public:
         // Instead, we will assume the client does not send us bad ACK numbers
         // So, we will just set our current sequence number to the ACK number
         seqNo_s = ackNo;
+        // also have to reset timeout counter
+        no_timeouts = 0;
+        // also have to reduce current congestion window
+        if ((m_packets_s[window_begin].m_seq + strlen(m_packets_s[window_begin].payload)) == ackNo)
+        {
+            cur_cong_window -= strlen(m_packets_s[window_begin].payload);
+            window_begin++;
+        }
     }
-    void timeout();
+    bool timeout()
+    {
+        no_timeouts++;
+        return no_timeouts == MAX_NO_TIMEOUTS;
+    }
     bool hasSpace(uint16_t size = 1024)
     {
-        return (pkts_in_window < cong_window_size);
+        return ((cur_cong_window + size) <= cong_window_size);
     }
     void insert(HeaderPacket pkt)
     {
         m_packets_s.push_back(pkt);
         window_end++;
+        cur_cong_window += strlen(pkt.payload);
     }
     bool hasNext()
     {
-        return (window_begin != window_end);
+        return (window_begin != window_end) && (cur_cong_window != 0);
     }
     HeaderPacket getPkt(uint16_t seqNo)
     {
-        if (m_packets_s[window_begin].m_seq == seqNo)
+        for (uint16_t i = window_begin; i <= window_end; i++)
         {
-            return m_packets_s[window_begin];
+            if (m_packets_s[i].m_seq == seqNo)
+            {
+                return m_packets_s[i];
+            }
         }
         return nullptr;
     }
@@ -98,15 +116,20 @@ public:
         // return sequence number for next packet, which should be updated correctly each time
         return seqNo_s;
     }
+    void setCongWindSize(uint16_t window_size)
+    {
+        cong_window_size = window_size;
+    }
 private:
     vector<HeaderPacket> m_packets_s;
     uint16_t seqNo_s;
-    uint16_t cong_window_size; // in number of packets
-    uint16_t pkts_in_window; // in number of packets
+    uint16_t cong_window_size; // in number of bytes
+    uint16_t cur_cong_window; // number of bytes currently in congestion window
     // These next two are needed because I am not deleting packets from our m_packets_s vector once they are ACK'ed
     // I am simply incrementing an index to adjust the window to the currently sending window
     uint16_t window_begin; // index of current beginning of window
     uint16_t window_end; // index of current end of window
+    uint16_t no_timeouts; // number of timeouts
 };
 
 int main(int argc, char* argv[])
