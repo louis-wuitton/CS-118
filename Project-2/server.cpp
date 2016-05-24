@@ -113,18 +113,19 @@ public:
     }
     void ack(uint16_t ackNo)
     {
-        // Ideally, I think it would be good check to see if the ACK number matches with what is expected
-        // However, that is a little hard to implement
-        // Instead, we will assume the client does not send us bad ACK numbers
-        // So, we will just set our current sequence number to the ACK number
-        seqNo_s = ackNo;
-        // also have to reset timeout counter
-        no_timeouts = 0;
-        // also have to reduce current congestion window
+        // Check to see if the ACK number matches with what is expected
         if ((m_packets_s[window_begin].m_seq + strlen(m_packets_s[window_begin].payload)) == ackNo)
         {
+            // set our current sequence number to the ACK number
+            seqNo_s = ackNo;
+            // also have to reset timeout counter
+            no_timeouts = 0;
+            // also have to reduce current congestion window
             cur_cong_window -= strlen(m_packets_s[window_begin].payload);
             window_begin++;
+            
+            // adjust congestion window size accordingly
+            
         }
     }
     bool timeout()
