@@ -43,12 +43,58 @@ uint16_t genRandom()
 class FileReader
 {
 public:
-    HeaderPacket top();
-    void pop();
+    void openfile(char* name);
+    HeaderPacket top(char* );
+    void pop(int index);
     bool hasMore();
 private:
-    
+    FILE* pfile
+    long m_position;
+    long f_size;
 };
+
+void FileReader::openfile(char* name)
+{
+    pfile = fopen(name, "r");
+    if(pfile == NULL)
+    {
+        cerr << "Fail to open the file" <<endl;
+    }
+    fseek(pFile, 0, SEEK_END);
+    f_size = ftell(pFile);
+    rewind(pFile);
+}
+
+
+HeaderPacket FileReader::top()
+{
+    HeaderPacket segment;
+    int readsize;
+    if(f_size - m_position < 1024)
+        readsize = m_position % 1024;
+    else
+        readsize = 1024;
+    
+    if (!feof(pFile)) {
+        fseek(pFile, m_position*(sizeof(char)),SEEK_SET);
+        fread(segment.payload, sizeof(char), readsize, pFile);
+    }
+    m_position += readsize;
+    return segment;
+}
+
+void FileReader::pop()
+{
+    m_position += 1024;
+}
+
+bool FileReader::hasMore()
+{
+    if(m_position >= lsize)
+        return false;
+    else
+        return true;
+}
 
 class OutputBuffer
 {
