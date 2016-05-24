@@ -42,7 +42,7 @@ uint16_t genRandom()
 class FileReader
 {
 public:
-    Segment top();
+    HeaderPacket top();
     void pop();
     bool hasMore();
 private:
@@ -52,23 +52,61 @@ private:
 class OutputBuffer
 {
 public:
+    void setup()
+    {
+        cong_window_size = 1;
+        pkts_in_window = 0;
+        window_begin = 0;
+        window_end = 0;
+    }
     void setInitSeq(uint16_t seqNo)
     {
-        ini_seq_s = seqNo;
+        seqNo_s = seqNo;
     }
-    void ack(uint16_t ackNo);
-    void timeout();
-    bool hasSpace(uint16_t size = 1024);
-    void insert(Segment seg);
-    uint16_t nextSegSeq();
-    Segment getSeg(uint16_t seqNo);
-    uint16_t getSeqNo()
+    void ack(uint16_t ackNo)
     {
-        return ini_seq_s;
+        // Ideally, I think it would be good check to see if the ACK number matches with what is expected
+        // However, that is a little hard to implement
+        // Instead, we will assume the client does not send us bad ACK numbers
+        // So, we will just set our current sequence number to the ACK number
+        seqNo_s = ackNo;
+    }
+    void timeout();
+    bool hasSpace(uint16_t size = 1024)
+    {
+        return (pkts_in_window < cong_window_size);
+    }
+    void insert(HeaderPacket pkt)
+    {
+        m_packets_s.push_back(pkt);
+        window_end++;
+    }
+    bool hasNext()
+    {
+        return (window_begin != window_end);
+    }
+    HeaderPacket getPkt(uint16_t seqNo)
+    {
+        if (m_packets_s[window_begin].m_seq == seqNo)
+        {
+            return m_packets_s[window_begin];
+        }
+        return nullptr;
+    }
+    uint16_t getNextSeqNo()
+    {
+        // return sequence number for next packet, which should be updated correctly each time
+        return seqNo_s;
     }
 private:
-    vector<HeaderPacket> m_segments_s;
-    uint16_t ini_seq_s;
+    vector<HeaderPacket> m_packets_s;
+    uint16_t seqNo_s;
+    uint16_t cong_window_size; // in number of packets
+    uint16_t pkts_in_window; // in number of packets
+    // These next two are needed because I am not deleting packets from our m_packets_s vector once they are ACK'ed
+    // I am simply incrementing an index to adjust the window to the currently sending window
+    uint16_t window_begin; // index of current beginning of window
+    uint16_t window_end; // index of current end of window
 };
 
 int main(int argc, char* argv[])
@@ -132,7 +170,7 @@ int main(int argc, char* argv[])
         
         // sending out SYNACK packet
         HeaderPacket resp_pkt_synack;
-        resp_pkt_synack.m_seq = htons(out_buf.getSeqNo());
+        resp_pkt_synack.m_seq = htons(out_buf.getNextSeqNo());
         resp_pkt_synack.m_ack = 0;
         resp_pkt_synack.m_flags = htons(0x6); //SYNACK flag
         resp_pkt_synack.m_window = htons(RECV_WINDOW);
