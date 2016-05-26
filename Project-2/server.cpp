@@ -24,8 +24,6 @@
 #define SYNACK 0x6;
 #define FINACK 0x3;
 #define MAX_NO_TIMEOUTS 3;
-#define INITIAL_SLOW_START_THRESHOLD 30720;
-#define MAX_PACKET_SIZE 1024;
 
 // defining states and corresponding numbers
 #define NO_CONNECTION 30;
@@ -39,7 +37,7 @@ using namespace std;
 // random number generator: used to generate initial sequence number
 uint16_t genRandom()
 {
-   return rand()%50;
+    return rand()%50;
 }
 
 class FileReader
@@ -95,7 +93,10 @@ bool FileReader::hasMore()
     if(m_position >= lsize)
         return false;
     else
+    {
+        fclose(pFile);
         return true;
+    }
 }
 
 class OutputBuffer
@@ -108,7 +109,6 @@ public:
         window_begin = 0;
         window_end = 0;
         no_timeouts = 0;
-        slow_start_threshold = INITIAL_SLOW_START_THRESHOLD;
     }
     void setInitSeq(uint16_t seqNo)
     {
@@ -139,6 +139,7 @@ public:
             }
         }
     }
+
     bool timeout()
     {
         // set slow start threshold to half of current congestion window
@@ -152,16 +153,19 @@ public:
         no_timeouts++;
         return no_timeouts == MAX_NO_TIMEOUTS;
     }
+    
     bool hasSpace(uint16_t size = 1024)
     {
         return ((cur_cong_window + size) <= cong_window_size);
     }
+    
     void insert(HeaderPacket pkt)
     {
         m_packets_s.push_back(pkt);
         window_end++;
         cur_cong_window += strlen(pkt.payload);
     }
+    
     bool hasNext()
     {
         return (window_begin != window_end) && (cur_cong_window != 0);
@@ -186,17 +190,23 @@ public:
     {
         cong_window_size = window_size;
     }
+    
+    uint16_t getWindowSize()
+    {
+        return cong_window_size;
+    }
+    
 private:
     vector<HeaderPacket> m_packets_s;
     uint16_t seqNo_s;
-    double cong_window_size; // in number of bytes
+    uint16_t cong_window_size; // in number of bytes
     uint16_t cur_cong_window; // number of bytes currently in congestion window
     // These next two are needed because I am not deleting packets from our m_packets_s vector once they are ACK'ed
     // I am simply incrementing an index to adjust the window to the currently sending window
     uint16_t window_begin; // index of current beginning of window
     uint16_t window_end; // index of current end of window
     uint16_t no_timeouts; // number of timeouts
-    double slow_start_threshold; // slow start threshold: changes depending on when timeouts occur
+    double slow_start_threshold;
 };
 
 int main(int argc, char* argv[])
@@ -222,7 +232,7 @@ int main(int argc, char* argv[])
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET; // IPv4
     hints.ai_socktype = SOCK_DGRAM;
-
+    
     int portno = atoi(argv[1]);
     cout << "port number is " << portno<<endl;
     
@@ -240,7 +250,7 @@ int main(int argc, char* argv[])
     
     // handle initial SYN request
     // placed this outside event loop because it would be hard to start up
-        // the server and the client within the 500ms timeout window otherwise
+    // the server and the client within the 500ms timeout window otherwise
     HeaderPacket req_pkt_syn;
     int clilen = 0;
     struct sockaddr_in clientAddr;
@@ -270,11 +280,8 @@ int main(int argc, char* argv[])
             return 1;
         }
     }
-
     
     
-    // getting ready to receive from client, set up event loop
-    // setting up sets for select() call
     fd_set readFds;
     fd_set writeFds;
     fd_set errFds;
@@ -283,9 +290,19 @@ int main(int argc, char* argv[])
     FD_ZERO(&writeFds);
     FD_ZERO(&errFds);
     FD_ZERO(&watchFds);
+    
+    OutputBuffer mybuffer;
+    FileReader myreader;
+    myreader.openfile(argv[3]);
+    
+    bool finish = false;
+    
 
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 500000;
     
-    
+
     while (true) { // event loop
         // setting up select() call
         int nReadyFds = 0;
@@ -299,10 +316,62 @@ int main(int argc, char* argv[])
             return 4;
         }
         
+        if(finish)
+        {
+            close(sockfd);
+            break;
+        }
         
         if (nReadyFds == 0) { // CASE TIMEOUT
-            std::cout << "no data is received" << std::endl;
-            //handle the timeout
+            if(state == SYNACK_SENT)
+            {
+                HeaderPacket resp_pkt_synack;
+                resp_pkt_synack.m_seq = htons(mybuffer.getNextSeqNo());
+                resp_pkt_synack.m_ack = htons(0);
+                resp_pkt_synack.m_flags = htons(SYNACK); //SYNACK flag
+                resp_pkt_synack.m_window = htons(mybuffer.getWindowSize());
+                if(sendto(sockfd, &resp_pkt_synack, sizeof(resp_pkt_synack), 0, (struct sockaddr*) &clientAddr, (socklen_t*) &clilen)<0)
+                {
+                    cerr << "Sendto fails" << endl;
+                    return 1;
+                }
+            }
+            else if (state == SENT_FIN)
+            {
+                HeaderPacket resp_pkt_fin;
+                resp_pkt_fin.m_seq = htons(mybuffer.getNextSeqNo());
+                resp_pkt_fin.m_flags = htons(FIN); //FIN flag
+                resp_pkt_synack.m_ack = htons(0);
+                resp_pkt_fin.m_window = htons(mybuffer.getWindowSize());
+                if(sendto(sockfd, &resp_pkt_fin, sizeof(resp_pkt_fin), 0, (struct sockaddr*) &clientAddr, (socklen_t*) &clilen)<0)
+                {
+                    cerr << "Sendto fails" << endl;
+                    return 1;
+                }
+
+                
+            }
+            else if (state == CONNECTED)
+            {
+                if(mybuffer.timeout())
+                {
+                    FD_CLR(&sockfdM &readFDs);
+                    close(sockfd);
+                    break;
+                }
+                else
+                {
+                    uint16_t seq = mybuffer.getNextSeqNo();
+                    HeaderPacket.res_pkt = mybuffer.getPkt(seq);
+                    res_pkt.m_seq = htons(seq);
+                    res_pkt.m_window = htons(mybuffer.getWindowSize());
+                    if(sendto(sockfd, &resp_pkt_synack, sizeof(resp_pkt_synack), 0, (struct sockaddr*) &clientAddr, (socklen_t*) &clilen)<0)
+                    {
+                        cerr << "Sendto fails" << endl;
+                        return 1;
+                    }
+                }
+            }
             break;
         }
         else
@@ -321,84 +390,87 @@ int main(int argc, char* argv[])
                     {
                         switch(req_pkt.m_flags)
                         {
-                            
+                                
                             case ACK:
                             {
                                 // check the state
                                 if (state == SYNACK_SENT)
                                 {
-                                	state = CONNECTED;
+                                    state = CONNECTED;
+                                    mybuffer.ack(ntohs(req_pkt.m_ack));
+                                    if(myreader.hasMore())
+                                        mybuffer.insert(myreader.top());
                                 }
                                 else if (state == SENT_FIN)
                                 {
-                                	
+                                    finish = true;
                                 }
                                 else if (state == CONNECTED)
                                 {
-                                	
+                                    mybuffer.ack(ntohs(req_pkt.m_ack));
+                                    while(myreader.hasMore() && mybuffer.hasSpace(myreader.top().size()))
+                                    {
+                                        mybuffer.insert(myreader.top());
+                                        myreader.pop();
+                                    }
                                 }
+                                
                             }
                             default:
                         }
                     }
-                    cout<<"The packet has a sequence number "<<req_pkt.m_seq <<endl;
-                    cout<<"The packet has flag " << req_pkt.m_flags << endl;
+                    if(finish)
+                        continue;
+                    cout<<"The packet has a sequence number "<< ntohs(req_pkt.m_seq) <<endl;
+                    cout<<"The packet has flag " << ntohs(req_pkt.m_flags)<< endl;
+                    
+                    
+                    if(!mybuffer.hasNext())
+                    {
+                        state = SENT_FIN;
+                    }
                     
                     FD_CLR(fd, &readFDs);
                     FD_SET(fd, &writeFDs);
                 }
                 
                 else if(FD_ISSET(fd, &writeFDs) // writing, sendto cases
-                {
-                    HeaderPacket res_pkt;
-                    res_pkt.m_window = req_pkt.m_window;
-                    res_pkt.m_ack = req_pkt.m_seq + 1;
-                    if(req_pkt.m_ack == 0)
-                    {
-                        res_pkt.m_seq = genRandom();
-                        res_pkt.m_flags |= 0x4;
-                        res_pkt.m_flags |= 0x2;
-                    }
-                    else
-                    {
-                        res_pkt.m_seq = req_pkt.m_ack;
-                        if(startfin)
                         {
-                            res_pkt.m_flags|=0x1;
-                        }
-                        else
-                        {
-                            res_pkt.m_flags |= 0x2;
-                            ifstream file;
-                            file.exception(ifstream::badbit | ifstream::eofbit);
-                            file.open(argv[2], ifstream::in| ifstream::binary | ifstream::out);
-                            if(!file.is_open())
+                            uint16_t seq = mybuffer.getNextSeqNo();
+                            HeaderPacket res_pkt;
+                            switch(state)
                             {
-                                cerr<<"File does not exist"<<endl;
-                                return 1;
-                            }
-                            else
-                            {
-                                file.seekg(0, ios::end);
-                                streampos length(file.tellg());
-                                if(length){
-                                    file.seekg(0, ios::beg);
-                                    file.read(res_pkt.payload, static_cast<size_t>(length));
+                                case CONNECTED:
+                                {
+                                    res_pkt = mybuffer.getPkt();
+                                    res_pkt.m_seq = htons(seq);
+                                    resp_pkt_synack.m_ack = htons(0);
+                                    res_pkt.m_window = htons(getWindowSize());
+                                    if(sendto(sockfd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr*) &clientAddr, (socklen_t*) &clilen)<0)
+                                    {
+                                        cerr << "Sendto fails" << endl;
+                                        return 1;
+                                    }
                                 }
-                                file.close();
+                                case SENT_FIN:
+                                {
+                                    res_pkt.m_seq = htons(seq);
+                                    res_pkt.m_window = htons(getWindowSize());
+                                    resp_pkt_synack.m_ack = htons(0);
+                                    if(sendto(sockfd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr*) &clientAddr, (socklen_t*) &clilen)<0)
+                                    {
+                                        cerr << "Sendto fails" << endl;
+                                        return 1;
+                                    }
+                                }
                             }
-                        }
-                        if(sendto(fd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr *)&clientAddr, (socklen_t*)clilen)< 0)
-                        {
-                            cerr << "sendto failed" << endl;
-                            return 1;
-                        }
-
-                    }
-		   
-                } // closing brace for elseif writing, sendto cases
-            } // closing brace for for loop, non-timeout cases
-        } // closing brace for else, non-timeout cases
-    } //closing brace for while loop, event loop
-    
-} // closing brace for main function
+                            
+                            FD_CLR(fd, &writeFDs);
+                            FD_SET(fd, &readFDs);
+                            
+                        } // closing brace for elseif writing, sendto cases
+                    } // closing brace for for loop, non-timeout cases
+                    } // closing brace for else, non-timeout cases
+                    } //closing brace for while loop, event loop
+                    
+                    } // closing brace for main function
