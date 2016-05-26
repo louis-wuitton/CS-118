@@ -24,6 +24,8 @@
 #define SYNACK 0x6;
 #define FINACK 0x3;
 #define MAX_NO_TIMEOUTS 3;
+#define INITIAL_SLOW_START_THRESHOLD 30720;
+#define MAX_PACKET_SIZE 1024;
 
 // defining states and corresponding numbers
 #define NO_CONNECTION 30;
@@ -106,6 +108,7 @@ public:
         window_begin = 0;
         window_end = 0;
         no_timeouts = 0;
+        slow_start_threshold = INITIAL_SLOW_START_THRESHOLD;
     }
     void setInitSeq(uint16_t seqNo)
     {
@@ -125,11 +128,27 @@ public:
             window_begin++;
             
             // adjust congestion window size accordingly
-            
+            // slow start case
+            if (cong_window_size <= slow_start_threshold)
+            {
+                cong_window_size += 1024;
+            }
+            else // congestion avoidance case
+            {
+                cong_window_size += (double) ((1/(cong_window_size/1024)) * MAX_PACKET_SIZE);
+            }
         }
     }
     bool timeout()
     {
+        // set slow start threshold to half of current congestion window
+        slow_start_threshold = 0.5 * cong_window_size;
+        // set congestion window back to 1 packet = 1024 bytes
+        cong_window_size = 1024;
+        // also need to reset current congestion window size: restart sending from packet that timed out
+        cur_cong_window = 0;
+        window_end = window_begin; // part of restarting send from packet that timed out
+        
         no_timeouts++;
         return no_timeouts == MAX_NO_TIMEOUTS;
     }
@@ -170,13 +189,14 @@ public:
 private:
     vector<HeaderPacket> m_packets_s;
     uint16_t seqNo_s;
-    uint16_t cong_window_size; // in number of bytes
+    double cong_window_size; // in number of bytes
     uint16_t cur_cong_window; // number of bytes currently in congestion window
     // These next two are needed because I am not deleting packets from our m_packets_s vector once they are ACK'ed
     // I am simply incrementing an index to adjust the window to the currently sending window
     uint16_t window_begin; // index of current beginning of window
     uint16_t window_end; // index of current end of window
     uint16_t no_timeouts; // number of timeouts
+    double slow_start_threshold; // slow start threshold: changes depending on when timeouts occur
 };
 
 int main(int argc, char* argv[])
