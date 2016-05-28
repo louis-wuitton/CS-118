@@ -21,6 +21,7 @@
 #define SYNACK 0x6
 #define PACKET 0x0
 #define FIN 0x1
+#define FINACK 0x3
 #define RECV_WINDOW 30720
 
 using namespace std;
@@ -69,10 +70,6 @@ class ReceivingBuffer
             }
             return m_segments[j].m_seq + strlen(m_segments[j].payload);
         }
-        uint16_t get_ini_seq()
-        {
-            return ini_seq;
-        }
         vector<HeaderPacket> getSegments()
         {
             return m_segments;
@@ -110,7 +107,7 @@ int main(int argc, char* argv[])
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
     addr.sin_port = htons(4000);     // short, network byte order
-    addr.sin_addr.s_addr = inet_addr("10.0.0.1");
+    addr.sin_addr.s_addr = inet_addr("10.0.0.2");
     memset(addr.sin_zero, '\0', sizeof(addr.sin_zero));
     
     
@@ -172,7 +169,7 @@ int main(int argc, char* argv[])
     
     
     HeaderPacket req_pkt;
-    req_pkt.m_seq = htons(genRanfom());
+    req_pkt.m_seq = htons(0);
     req_pkt.m_ack = htons(0);
     req_pkt.m_flags = htons(0x4);
     req_pkt.m_window = htons(RECV_WINDOW);
@@ -181,7 +178,7 @@ int main(int argc, char* argv[])
         cerr<<"Sendto fails" <<endl;
         return 1;
     }
-
+    FD_SET(sockfd, &readFds);
     
     while (true) {
         int nReadyFds = 0;
@@ -236,6 +233,7 @@ int main(int argc, char* argv[])
                         cerr<<"Failure in recvfrom" <<endl;
                         return 1;
                     }
+                    cout << "Receiving data packet " << ntohs(res_pkt.m_seq)<<endl;
                     uint16_t flagcheck = ntohs(res_pkt.m_flags);
                     switch (flagcheck) {
                         case SYNACK:{
@@ -252,13 +250,13 @@ int main(int argc, char* argv[])
                         }
                         case FIN:{
                             //next_seq = ntohs(res_pkt.m_ack);
-                            next_ack = ntohs(res_pkt.m_seq) + 1;
+                            next_ack = ntohs(res_pkt.m_seq);
                             writestate = FIN;
                             break;
                         }
                         default:
                         {
-                            cerr<< "we get a packet that has invalid flag";
+                            cerr<< "we get a packet that has invalid flag" <<endl;
                             return 1;
                         }
                     }
@@ -268,13 +266,15 @@ int main(int argc, char* argv[])
                 }
                 else if(FD_ISSET(fd, &writeFds))
                 {
-                    HeaderPacket req_pkt;
                     switch (writestate) {
                         case SYNACK:{
-                            //req_pkt.m_seq = htons(next_ack);
-                            req_pkt.m_ack = recv_buffer.get_ini_seq() + 1;
-                            req_pkt.m_flags = htons(0x2);
+                            HeaderPacket req_pkt;
+                            memset(req_pkt.payload, '\0', sizeof(req_pkt.payload));
+                            req_pkt.m_seq = htons(0x0);
+                            req_pkt.m_ack = htons(next_ack);
+                            req_pkt.m_flags = htons(SYNACK);
                             req_pkt.m_window = htons(RECV_WINDOW);
+                            cout <<"Sending ACK packet " << ntohs(req_pkt.m_ack) <<endl;
                             if(sendto(fd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr, serlen)<0)
                             {
                                 cerr<<"Sendto fails" <<endl;
@@ -284,10 +284,14 @@ int main(int argc, char* argv[])
                             break;
                         }
                         case PACKET:{
-                            //req_pkt.m_seq = htons(next_seq);
+                            HeaderPacket req_pkt;
+                            req_pkt.m_seq = htons(0x0);
+                            memset(req_pkt.payload, '\0', sizeof(req_pkt.payload));
+                            cout <<"sending acks to packets" <<endl;
                             req_pkt.m_ack = htons(next_ack);
                             req_pkt.m_window = htons(RECV_WINDOW);
                             req_pkt.m_flags = htons(0x2);
+                            cout <<"Sending ACK packet " << ntohs(req_pkt.m_ack) <<endl;
                             if(sendto(fd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr, serlen)<0)
                             {
                                 cerr<<"Sendto fails" <<endl;
@@ -297,10 +301,15 @@ int main(int argc, char* argv[])
                         }
                         case FIN: {
                             //req_pkt.m_seq = htons(next_seq);
+                            HeaderPacket req_pkt;
+                            memset(req_pkt.payload, '\0', sizeof(req_pkt.payload));
+                            cout <<"sending ack to fin" <<endl;
+                            req_pkt.m_seq = htons(0x0);
                             req_pkt.m_ack = htons(next_ack);
                             req_pkt.m_window = htons(RECV_WINDOW);
-                            req_pkt.m_flags = htons(0x3);
+                            req_pkt.m_flags = htons(FINACK);
                             finish = true;
+                            cout <<"Sending ACK packet " << ntohs(req_pkt.m_ack) <<endl;
                             if(sendto(fd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr, serlen)<0)
                             {
                                 cerr<<"Sendto fails" <<endl;
@@ -313,9 +322,9 @@ int main(int argc, char* argv[])
                             cerr<<"This flag is invalid" <<endl;
                             return 1;
                         }
+                    }
                         FD_CLR(fd, &writeFds);
                         FD_SET(fd, &readFds);
-                    }
                     
                 }
             }
@@ -324,12 +333,21 @@ int main(int argc, char* argv[])
         
     }
     //we gonna write into the file
-    ofstream file;
-    file.open ("received.data",ofstream::out | ofstream::app | ofstream::binary );
-    vector<HeaderPacket> segment = recv_buffer.getSegments();
-    for (int i = 0; i < segment.size(); i++) {
-        file.write(&segment[i].payload[0], strlen(segment[i].payload));
+    cout << "write into a file" <<endl;
+    if(ifstream("received.data"))
+    {
+        cout <<"received.data already exists" <<endl;
     }
-    file.close();
+    else
+    {
+        ofstream file;
+        file.open ("received.data",ofstream::out | ofstream::app | ofstream::binary );
+        vector<HeaderPacket> segment = recv_buffer.getSegments();
+        //print out content
+        for (int i = 0; i < segment.size(); i++) {
+            file.write(&segment[i].payload[0], strlen(segment[i].payload));
+        }
+        file.close();
+    }
 }
 
