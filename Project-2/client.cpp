@@ -2,6 +2,7 @@
 #include <thread>
 #include <iostream>
 #include <sstream>
+#include <fstream>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -54,7 +55,7 @@ class ReceivingBuffer
             {
                 if(m_segments[i].m_seq > seqNo)
                 {
-                    m_segments.insert(it+i, seqNo);
+                    m_segments.insert(it+i, packet);
                     break;
                 }
                 i++;
@@ -66,11 +67,15 @@ class ReceivingBuffer
                 if((m_segments[j].m_seq+strlen(m_segments[j].payload)) != m_segments[j+1].m_seq)
                     return m_segments[j].m_seq+strlen(m_segments[j].payload);
             }
-            return m_segments[j].m_seq + strlen(m_segments[j].payload());
+            return m_segments[j].m_seq + strlen(m_segments[j].payload);
         }
         uint16_t get_ini_seq()
         {
             return ini_seq;
+        }
+        vector<HeaderPacket> getSegments()
+        {
+            return m_segments;
         }
     private:
     vector<HeaderPacket> m_segments;
@@ -101,6 +106,19 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    
+    struct sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(4000);     // short, network byte order
+    addr.sin_addr.s_addr = inet_addr("10.0.0.1");
+    memset(addr.sin_zero, '\0', sizeof(addr.sin_zero));
+    
+    
+    if (bind(sockfd, (struct sockaddr*)&addr, sizeof(addr)) == -1) {
+        perror("bind");
+        return 2;
+    }
+    
     struct addrinfo hints;
     struct addrinfo* res;
     memset(&hints, 0, sizeof(hints));
@@ -132,6 +150,7 @@ int main(int argc, char* argv[])
     servaddr.sin_port = htons(portno);
     servaddr.sin_addr.s_addr = inet_addr(argv[1]);
     memset(servaddr.sin_zero, '\0', sizeof(servaddr.sin_zero));
+    int serlen = sizeof(servaddr);
     
     //setting up the sets for the sockets
     fd_set readFds;
@@ -147,8 +166,23 @@ int main(int argc, char* argv[])
     struct timeval tv;
     uint16_t writestate;
     uint16_t next_ack;
-    uint16_t next_seq;
+   // uint16_t next_seq;
     bool finish = false;
+    
+    
+    
+    HeaderPacket req_pkt;
+    req_pkt.m_seq = htons(genRanfom());
+    req_pkt.m_ack = htons(0);
+    req_pkt.m_flags = htons(0x4);
+    req_pkt.m_window = htons(RECV_WINDOW);
+    if(sendto(sockfd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr, serlen) <0)
+    {
+        cerr<<"Sendto fails" <<endl;
+        return 1;
+    }
+
+    
     while (true) {
         int nReadyFds = 0;
         if(!finish)
@@ -164,7 +198,7 @@ int main(int argc, char* argv[])
         if(!FD_ISSET(sockfd, &watchFds))
             FD_SET(sockfd, &watchFds);
         errFds = watchFds;
-        if ((nReadyFds = select(maxSockfd+1, &readFds, &writeFds, &errFds, NULL)) == -1) {
+        if ((nReadyFds = select(maxSockfd+1, &readFds, &writeFds, &errFds, &tv)) == -1) {
             perror("select");
             return 4;
         }
@@ -172,8 +206,8 @@ int main(int argc, char* argv[])
         {
             if(finish)
             {
-                FD_CLR(&sockfd, &readFds);
-                close(fd);
+                FD_CLR(sockfd, &readFds);
+                close(sockfd);
                 break;
             }
             else {
@@ -182,7 +216,7 @@ int main(int argc, char* argv[])
                 req_pkt.m_ack = htons(0);
                 req_pkt.m_flags = htons(0x4);
                 req_pkt.m_window = htons(RECV_WINDOW);
-                if(sendto(sockfd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr)<0)
+                if(sendto(sockfd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr, serlen) <0)
                 {
                     cerr<<"Sendto fails" <<endl;
                     return 1;
@@ -196,7 +230,7 @@ int main(int argc, char* argv[])
                 if(FD_ISSET(fd, &readFds))
                 {
                     HeaderPacket res_pkt;
-                    int serlen;
+                 
                     if(recvfrom(fd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr*) &servaddr, (socklen_t*)&serlen) <0 )
                     {
                         cerr<<"Failure in recvfrom" <<endl;
@@ -205,18 +239,19 @@ int main(int argc, char* argv[])
                     uint16_t flagcheck = ntohs(res_pkt.m_flags);
                     switch (flagcheck) {
                         case SYNACK:{
+                            next_ack = ntohs(res_pkt.m_seq)+1;
                             recv_buffer.setInitSeq(ntohs(res_pkt.m_seq));
                             writestate = SYNACK;
                             break;
                         }
                         case PACKET:{
-                            next_seq = ntohs(res_pkt.m_ack);
-                            next_ack = recv_buffer.insert(ntohs(res_pkt.m_seq));
+                            //next_seq = ntohs(res_pkt.m_ack);
+                            next_ack = recv_buffer.insert(ntohs(res_pkt.m_seq), res_pkt);
                             writestate = PACKET;
                             break;
                         }
                         case FIN:{
-                            next_seq = ntohs(res_pkt.m_ack);
+                            //next_seq = ntohs(res_pkt.m_ack);
                             next_ack = ntohs(res_pkt.m_seq) + 1;
                             writestate = FIN;
                             break;
@@ -227,8 +262,8 @@ int main(int argc, char* argv[])
                             return 1;
                         }
                     }
-                    FD_CLR(&fd, &readFds);
-                    FD_SET(&fd, &writeFds);
+                    FD_CLR(fd, &readFds);
+                    FD_SET(fd, &writeFds);
                     
                 }
                 else if(FD_ISSET(fd, &writeFds))
@@ -236,11 +271,11 @@ int main(int argc, char* argv[])
                     HeaderPacket req_pkt;
                     switch (writestate) {
                         case SYNACK:{
-                            req_pkt.m_seq = htons(genRanfom());
+                            //req_pkt.m_seq = htons(next_ack);
                             req_pkt.m_ack = recv_buffer.get_ini_seq() + 1;
                             req_pkt.m_flags = htons(0x2);
                             req_pkt.m_window = htons(RECV_WINDOW);
-                            if(sendto(fd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr)<0)
+                            if(sendto(fd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr, serlen)<0)
                             {
                                 cerr<<"Sendto fails" <<endl;
                                 return 1;
@@ -249,11 +284,11 @@ int main(int argc, char* argv[])
                             break;
                         }
                         case PACKET:{
-                            req_pkt.m_seq = htons(next_seq);
+                            //req_pkt.m_seq = htons(next_seq);
                             req_pkt.m_ack = htons(next_ack);
                             req_pkt.m_window = htons(RECV_WINDOW);
                             req_pkt.m_flags = htons(0x2);
-                            if(sendto(fd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr)<0)
+                            if(sendto(fd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr, serlen)<0)
                             {
                                 cerr<<"Sendto fails" <<endl;
                                 return 1;
@@ -261,12 +296,12 @@ int main(int argc, char* argv[])
                             break;
                         }
                         case FIN: {
-                            req_pkt.m_seq = htons(next_seq);
+                            //req_pkt.m_seq = htons(next_seq);
                             req_pkt.m_ack = htons(next_ack);
                             req_pkt.m_window = htons(RECV_WINDOW);
                             req_pkt.m_flags = htons(0x3);
                             finish = true;
-                            if(sendto(fd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr)<0)
+                            if(sendto(fd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr, serlen)<0)
                             {
                                 cerr<<"Sendto fails" <<endl;
                                 return 1;
@@ -278,8 +313,8 @@ int main(int argc, char* argv[])
                             cerr<<"This flag is invalid" <<endl;
                             return 1;
                         }
-                        FD_CLR(&fd, &wirteFds);
-                        FD_SET(&fd, &readFds);
+                        FD_CLR(fd, &writeFds);
+                        FD_SET(fd, &readFds);
                     }
                     
                 }
@@ -289,10 +324,11 @@ int main(int argc, char* argv[])
         
     }
     //we gonna write into the file
-    std::ofstream file;
-    file.open ("received.data",std::ofstream::out | std::ofstream::app | std::ofstream::binary );
-    for (int i = 0; i < recv_buffer.size(); i++) {
-        file.write(&recv_buffer[i].payload[0], strlen(recv_buffer[i].payload));
+    ofstream file;
+    file.open ("received.data",ofstream::out | ofstream::app | ofstream::binary );
+    vector<HeaderPacket> segment = recv_buffer.getSegments();
+    for (int i = 0; i < segment.size(); i++) {
+        file.write(&segment[i].payload[0], strlen(segment[i].payload));
     }
     file.close();
 }

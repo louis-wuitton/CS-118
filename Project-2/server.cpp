@@ -18,18 +18,20 @@
 #include "packet.h"
 
 //defining flags and useful numbers
-#define SYN 0x4;
-#define ACK 0x2;
-#define FIN 0x1;
-#define SYNACK 0x6;
-#define FINACK 0x3;
-#define MAX_NO_TIMEOUTS 3;
+#define SYN 0x4
+#define ACK 0x2
+#define FIN 0x1
+#define SYNACK 0x6
+#define FINACK 0x3
+#define MAX_NO_TIMEOUTS 3
+//#define MAX_PACKET_SIZE 1024
+
 
 // defining states and corresponding numbers
-#define NO_CONNECTION 30;
-#define SYNACK_SENT 31;
-#define CONNECTED 32;
-#define SENT_FIN 33;
+#define NO_CONNECTION 30
+#define SYNACK_SENT 31
+#define CONNECTED 32
+#define SENT_FIN 33
 
 using namespace std;
 
@@ -44,11 +46,11 @@ class FileReader
 {
 public:
     void openfile(char* name);
-    HeaderPacket top(char* );
-    void pop(int index);
+    HeaderPacket top();
+    void pop();
     bool hasMore();
 private:
-    FILE* pfile
+    FILE* pfile;
     long m_position;
     long f_size;
 };
@@ -60,9 +62,9 @@ void FileReader::openfile(char* name)
     {
         cerr << "Fail to open the file" <<endl;
     }
-    fseek(pFile, 0, SEEK_END);
-    f_size = ftell(pFile);
-    rewind(pFile);
+    fseek(pfile, 0, SEEK_END);
+    f_size = ftell(pfile);
+    rewind(pfile);
 }
 
 
@@ -75,9 +77,9 @@ HeaderPacket FileReader::top()
     else
         readsize = 1024;
     
-    if (!feof(pFile)) {
-        fseek(pFile, m_position*(sizeof(char)),SEEK_SET);
-        fread(segment.payload, sizeof(char), readsize, pFile);
+    if (!feof(pfile)) {
+        fseek(pfile, m_position*(sizeof(char)),SEEK_SET);
+        fread(segment.payload, sizeof(char), readsize, pfile);
     }
     m_position += readsize;
     return segment;
@@ -90,11 +92,12 @@ void FileReader::pop()
 
 bool FileReader::hasMore()
 {
-    if(m_position >= lsize)
+    
+    if(m_position >= f_size)
         return false;
     else
     {
-        fclose(pFile);
+        fclose(pfile);
         return true;
     }
 }
@@ -135,7 +138,7 @@ public:
             }
             else // congestion avoidance case
             {
-                cong_window_size += (double) ((1/(cong_window_size/1024)) * MAX_PACKET_SIZE);
+                cong_window_size +=  ((1/(cong_window_size/1024)) * 1024);
             }
         }
     }
@@ -179,7 +182,7 @@ public:
                 return m_packets_s[i];
             }
         }
-        return nullptr;
+        //return NULL;
     }
     uint16_t getNextSeqNo()
     {
@@ -199,8 +202,8 @@ public:
 private:
     vector<HeaderPacket> m_packets_s;
     uint16_t seqNo_s;
-    uint16_t cong_window_size; // in number of bytes
-    uint16_t cur_cong_window; // number of bytes currently in congestion window
+    double cong_window_size; // in number of bytes
+    double cur_cong_window; // number of bytes currently in congestion window
     // These next two are needed because I am not deleting packets from our m_packets_s vector once they are ACK'ed
     // I am simply incrementing an index to adjust the window to the currently sending window
     uint16_t window_begin; // index of current beginning of window
@@ -252,9 +255,13 @@ int main(int argc, char* argv[])
     // placed this outside event loop because it would be hard to start up
     // the server and the client within the 500ms timeout window otherwise
     HeaderPacket req_pkt_syn;
-    int clilen = 0;
     struct sockaddr_in clientAddr;
-    OutputBuffer out_buf;
+    socklen_t clilen = sizeof(clientAddr);
+    /*
+    memset((char*)&clientAddr, 0, sizeof(clientAddr));
+    servaddr.sin_family = AF_INET;
+    */
+    OutputBuffer mybuffer;
     uint16_t state = NO_CONNECTION;
     
     if(recvfrom(sockfd, &req_pkt_syn, sizeof(req_pkt_syn), 0, (struct sockaddr*) &clientAddr, (socklen_t*) &clilen) < 0)
@@ -262,19 +269,20 @@ int main(int argc, char* argv[])
         cerr << "recvfrom failed" << endl;
         return 1;
     }
-    else if (req_pkt_syn)
+    else
     {
         state = SYNACK_SENT;
         uint16_t initseq = genRandom();
-        out_buf.setInitSeq(initseq);
+        mybuffer.setInitSeq(initseq);
         
         // sending out SYNACK packet
         HeaderPacket resp_pkt_synack;
-        resp_pkt_synack.m_seq = htons(out_buf.getNextSeqNo());
+        resp_pkt_synack.m_seq = htons(mybuffer.getNextSeqNo());
         resp_pkt_synack.m_ack = 0;
         resp_pkt_synack.m_flags = htons(0x6); //SYNACK flag
-        resp_pkt_synack.m_window = htons(RECV_WINDOW);
-        if(sendto(sockfd, &resp_pkt_synack, sizeof(resp_pkt_synack), 0, (struct sockaddr*) &clientAddr, (socklen_t*) &clilen)<0)
+        //resp_pkt_synack.m_window = htons(RECV_WINDOW);
+        
+        if(sendto(sockfd, &resp_pkt_synack, sizeof(resp_pkt_synack), 0, (struct sockaddr*) &clientAddr, clilen)<0)
         {
             cerr << "Sendto fails" << endl;
             return 1;
@@ -291,7 +299,6 @@ int main(int argc, char* argv[])
     FD_ZERO(&errFds);
     FD_ZERO(&watchFds);
     
-    OutputBuffer mybuffer;
     FileReader myreader;
     myreader.openfile(argv[3]);
     
@@ -322,15 +329,15 @@ int main(int argc, char* argv[])
             break;
         }
         
-        if (nReadyFds == 0) { // CASE TIMEOUT
+        if (nReadyFds == 0) {
             if(state == SYNACK_SENT)
             {
                 HeaderPacket resp_pkt_synack;
                 resp_pkt_synack.m_seq = htons(mybuffer.getNextSeqNo());
                 resp_pkt_synack.m_ack = htons(0);
                 resp_pkt_synack.m_flags = htons(SYNACK); //SYNACK flag
-                resp_pkt_synack.m_window = htons(mybuffer.getWindowSize());
-                if(sendto(sockfd, &resp_pkt_synack, sizeof(resp_pkt_synack), 0, (struct sockaddr*) &clientAddr, (socklen_t*) &clilen)<0)
+                //resp_pkt_synack.m_window = htons(mybuffer.getWindowSize());
+                if(sendto(sockfd, &resp_pkt_synack, sizeof(resp_pkt_synack), 0, (struct sockaddr*) &clientAddr, clilen)<0)
                 {
                     cerr << "Sendto fails" << endl;
                     return 1;
@@ -341,9 +348,9 @@ int main(int argc, char* argv[])
                 HeaderPacket resp_pkt_fin;
                 resp_pkt_fin.m_seq = htons(mybuffer.getNextSeqNo());
                 resp_pkt_fin.m_flags = htons(FIN); //FIN flag
-                resp_pkt_synack.m_ack = htons(0);
-                resp_pkt_fin.m_window = htons(mybuffer.getWindowSize());
-                if(sendto(sockfd, &resp_pkt_fin, sizeof(resp_pkt_fin), 0, (struct sockaddr*) &clientAddr, (socklen_t*) &clilen)<0)
+                resp_pkt_fin.m_ack = htons(0);
+                //resp_pkt_fin.m_window = htons(mybuffer.getWindowSize());
+                if(sendto(sockfd, &resp_pkt_fin, sizeof(resp_pkt_fin), 0, (struct sockaddr*) &clientAddr, clilen)<0)
                 {
                     cerr << "Sendto fails" << endl;
                     return 1;
@@ -355,17 +362,17 @@ int main(int argc, char* argv[])
             {
                 if(mybuffer.timeout())
                 {
-                    FD_CLR(&sockfdM &readFDs);
+                    FD_CLR(sockfd, &readFds);
                     close(sockfd);
                     break;
                 }
                 else
                 {
                     uint16_t seq = mybuffer.getNextSeqNo();
-                    HeaderPacket.res_pkt = mybuffer.getPkt(seq);
+                    HeaderPacket res_pkt = mybuffer.getPkt(seq);
                     res_pkt.m_seq = htons(seq);
-                    res_pkt.m_window = htons(mybuffer.getWindowSize());
-                    if(sendto(sockfd, &resp_pkt_synack, sizeof(resp_pkt_synack), 0, (struct sockaddr*) &clientAddr, (socklen_t*) &clilen)<0)
+                    //res_pkt.m_window = htons(mybuffer.getWindowSize());
+                    if(sendto(sockfd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr*) &clientAddr, clilen)<0)
                     {
                         cerr << "Sendto fails" << endl;
                         return 1;
@@ -388,7 +395,7 @@ int main(int argc, char* argv[])
                     }
                     else
                     {
-                        switch(req_pkt.m_flags)
+                        switch(ntohs(req_pkt.m_flags))
                         {
                                 
                             case ACK:
@@ -408,15 +415,16 @@ int main(int argc, char* argv[])
                                 else if (state == CONNECTED)
                                 {
                                     mybuffer.ack(ntohs(req_pkt.m_ack));
-                                    while(myreader.hasMore() && mybuffer.hasSpace(myreader.top().size()))
+                                    while(myreader.hasMore() && mybuffer.hasSpace(strlen(myreader.top().payload)))
                                     {
                                         mybuffer.insert(myreader.top());
                                         myreader.pop();
                                     }
                                 }
-                                
+                                break;
                             }
                             default:
+                                break;
                         }
                     }
                     if(finish)
@@ -430,47 +438,48 @@ int main(int argc, char* argv[])
                         state = SENT_FIN;
                     }
                     
-                    FD_CLR(fd, &readFDs);
-                    FD_SET(fd, &writeFDs);
+                    FD_CLR(fd, &readFds);
+                    FD_SET(fd, &writeFds);
                 }
                 
-                else if(FD_ISSET(fd, &writeFDs) // writing, sendto cases
+                else if(FD_ISSET(fd, &writeFds)) // writing, sendto cases
+                {
+                        uint16_t seq = mybuffer.getNextSeqNo();
+                        HeaderPacket res_pkt;
+                        switch(state)
                         {
-                            uint16_t seq = mybuffer.getNextSeqNo();
-                            HeaderPacket res_pkt;
-                            switch(state)
+                            case CONNECTED:
                             {
-                                case CONNECTED:
+                                res_pkt = mybuffer.getPkt(seq);
+                                res_pkt.m_seq = htons(seq);
+                                res_pkt.m_ack = htons(0);
+                                   // res_pkt.m_window = htons(getWindowSize());
+                                if(sendto(sockfd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr*) &clientAddr, clilen)<0)
                                 {
-                                    res_pkt = mybuffer.getPkt();
-                                    res_pkt.m_seq = htons(seq);
-                                    resp_pkt_synack.m_ack = htons(0);
-                                    res_pkt.m_window = htons(getWindowSize());
-                                    if(sendto(sockfd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr*) &clientAddr, (socklen_t*) &clilen)<0)
-                                    {
-                                        cerr << "Sendto fails" << endl;
-                                        return 1;
-                                    }
-                                }
-                                case SENT_FIN:
-                                {
-                                    res_pkt.m_seq = htons(seq);
-                                    res_pkt.m_window = htons(getWindowSize());
-                                    resp_pkt_synack.m_ack = htons(0);
-                                    if(sendto(sockfd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr*) &clientAddr, (socklen_t*) &clilen)<0)
-                                    {
-                                        cerr << "Sendto fails" << endl;
-                                        return 1;
-                                    }
+                                    cerr << "Sendto fails" << endl;
+                                    return 1;
                                 }
                             }
+                            case SENT_FIN:
+                            {
+                                res_pkt.m_seq = htons(seq);
+                                //res_pkt.m_window = htons(getWindowSize());
+                                res_pkt.m_ack = htons(0);
+                                if(sendto(sockfd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr*) &clientAddr, clilen)<0)
+                                {
+                                    cerr << "Sendto fails" << endl;
+                                    return 1;
+                                }
+                            }
+                        }
                             
-                            FD_CLR(fd, &writeFDs);
-                            FD_SET(fd, &readFDs);
+                            FD_CLR(fd, &writeFds);
+                            FD_SET(fd, &readFds);
                             
-                        } // closing brace for elseif writing, sendto cases
-                    } // closing brace for for loop, non-timeout cases
-                    } // closing brace for else, non-timeout cases
-                    } //closing brace for while loop, event loop
+                    } // closing brace for elseif writing, sendto cases
+            } // closing brace for for loop, non-timeout cases
+        } // closing brace for else, non-timeout cases
+     } //closing brace for while loop, event loop
                     
-                    } // closing brace for main function
+    }// closing brace for main function
+            
