@@ -74,6 +74,7 @@ HeaderPacket FileReader::top()
 {
     FILE* pfile = fopen(m_name, "r");
     HeaderPacket segment;
+    memset(segment.payload, '\0', sizeof(segment.payload));
     int readsize;
     if(f_size - m_position < 1024)
         readsize = f_size % 1024;
@@ -81,10 +82,10 @@ HeaderPacket FileReader::top()
         readsize = 1024;
     
     if (!feof(pfile)) {
-        fseek(pfile, m_position*(sizeof(char)),SEEK_SET);
+        fseek(pfile, m_position*1,SEEK_SET);
         fread(segment.payload, 1, readsize, pfile);
     }
-    m_position += readsize;
+    //m_position += readsize;
     //segment.m_seq = htons(readsize);
     return segment;
 }
@@ -113,6 +114,7 @@ public:
         window_begin = 0;
         window_end = 0;
         no_timeouts = 0;
+        slow_start_threshold = 30720;
     }
     void setInitSeq(uint16_t seqNo)
     {
@@ -121,7 +123,13 @@ public:
     void ack(uint16_t ackNo)
     {
         // Check to see if the ACK number matches with what is expected
-        if ((ntohs(m_packets_s[window_begin].m_seq) + strlen(m_packets_s[window_begin].payload)) == ackNo)
+        uint16_t begin_length = strlen(m_packets_s[window_begin].payload);
+        if (begin_length >= 1024)
+            begin_length = 1024;
+        cout << "try to ack " << ackNo <<endl;
+        cout << "Beginning window seq number is " << ntohs(m_packets_s[window_begin].m_seq) << " and this window is number " << window_begin  <<endl;
+        cout << "current buffer size is " << m_packets_s.size()<<endl;
+        if ((ntohs(m_packets_s[window_begin].m_seq) + begin_length) == ackNo)
         {
             // set our current sequence number to the ACK number
             cout << "the if statement in ack pass" <<endl;
@@ -129,7 +137,7 @@ public:
             // also have to reset timeout counter
             no_timeouts = 0;
             // also have to reduce current congestion window
-            cur_cong_window -= strlen(m_packets_s[window_begin].payload);
+            cur_cong_window -= begin_length;
             window_begin++;
             
             // adjust congestion window size accordingly
@@ -137,6 +145,7 @@ public:
             if (cong_window_size <= slow_start_threshold)
             {
                 cong_window_size += 1024;
+                cout <<"congestion window size is "<<cong_window_size <<endl;
             }
             else // congestion avoidance case
             {
@@ -161,13 +170,29 @@ public:
     
     bool hasSpace(uint16_t size = 1024)
     {
+        if(size >= 1024)
+            size = 1024;
         return ((cur_cong_window + size) <= cong_window_size);
     }
     
     void insert(HeaderPacket pkt)
     {
         //insert the data packet into the buffer
-        pkt.m_seq = htons(seqNo_s);
+        if(!m_packets_s.empty())
+        {
+            int bufsize = m_packets_s.size();
+           // cout << "inserting packet with size " << p_size<<endl;
+            uint16_t add_on = strlen(m_packets_s[bufsize-1].payload);
+            if(add_on >= 1024){
+                add_on = 1024;
+            }
+            uint16_t new_seq = ntohs(m_packets_s[bufsize-1].m_seq) + add_on;
+            pkt.m_seq = htons(new_seq);
+        }
+        else
+        {
+            pkt.m_seq = htons(seqNo_s);
+        }
         pkt.m_ack = htons(0x0);
         pkt.m_flags = htons(0x0);
         m_packets_s.push_back(pkt);
@@ -181,13 +206,14 @@ public:
     }
     HeaderPacket getPkt(uint16_t seqNo)
     {
-        for (uint16_t i = window_begin; i <= window_end; i++)
+        for (uint16_t i = 0; i <m_packets_s.size(); i++)
         {
             if (ntohs(m_packets_s[i].m_seq) == seqNo)
             {
                 return m_packets_s[i];
             }
         }
+        cout << "not finding anything" <<endl;
         //return NULL;
     }
     uint16_t getNextSeqNo()
@@ -416,6 +442,7 @@ int main(int argc, char* argv[])
                                 if(myreader.hasMore())
                                 {
                                     mybuffer.insert(myreader.top());
+                                    myreader.pop();
                                 }
                                 else
                                 {
@@ -470,10 +497,8 @@ int main(int argc, char* argv[])
                             {
                                 cout <<"state is connected"<<endl;
                                 res_pkt = mybuffer.getPkt(seq); // initial sequence number
-                                //res_pkt.m_seq = htons(seq);
-                                //sending data packet
-                                // res_pkt.m_window = htons(getWindowSize());
                                 cout << "Sending data packet " << seq << endl;
+                                cout << "But the actual packet's seq no is " << ntohs(res_pkt.m_seq) <<endl;
                                 if(sendto(sockfd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr*) &clientAddr, clilen)<0)
                                 {
                                     cerr << "Sendto fails" << endl;

@@ -43,7 +43,12 @@ class ReceivingBuffer
             {
                 m_segments.push_back(packet);
                 if(seqNo == ini_seq+1)
-                    return seqNo + strlen(packet.payload);
+                {
+                    if(strlen(packet.payload) < 1024)
+                        return seqNo + strlen(packet.payload);
+                    else
+                        return seqNo + 1024;
+                }
                 else
                     return ini_seq + 1;
             }
@@ -54,7 +59,7 @@ class ReceivingBuffer
             uint16_t return_val;
             while (i < m_segments.size())
             {
-                if(m_segments[i].m_seq > seqNo)
+                if(ntohs(m_segments[i].m_seq)> seqNo)
                 {
                     m_segments.insert(it+i, packet);
                     break;
@@ -63,12 +68,23 @@ class ReceivingBuffer
             }
             if(i == m_segments.size())
                 m_segments.push_back(packet);
+            
             int j;
+            uint16_t segsize;
             for (j = 0; j < m_segments.size()-1; j++) {
-                if((m_segments[j].m_seq+strlen(m_segments[j].payload)) != m_segments[j+1].m_seq)
-                    return m_segments[j].m_seq+strlen(m_segments[j].payload);
+                segsize = strlen(m_segments[j].payload);
+                if(segsize >= 1024)
+                    segsize = 1024;
+                if((ntohs(m_segments[j].m_seq)+segsize) != ntohs(m_segments[j+1].m_seq))
+                {
+                    cout << "mismatch" <<endl;
+                    return ntohs(m_segments[j].m_seq)+segsize;
+                }
             }
-            return m_segments[j].m_seq + strlen(m_segments[j].payload);
+            segsize = strlen(m_segments[j].payload);
+            if(segsize >= 1024)
+                segsize = 1024;
+            return ntohs(m_segments[j].m_seq) + segsize;
         }
         vector<HeaderPacket> getSegments()
         {
@@ -227,7 +243,6 @@ int main(int argc, char* argv[])
                 if(FD_ISSET(fd, &readFds))
                 {
                     HeaderPacket res_pkt;
-                 
                     if(recvfrom(fd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr*) &servaddr, (socklen_t*)&serlen) <0 )
                     {
                         cerr<<"Failure in recvfrom" <<endl;
@@ -345,7 +360,11 @@ int main(int argc, char* argv[])
         vector<HeaderPacket> segment = recv_buffer.getSegments();
         //print out content
         for (int i = 0; i < segment.size(); i++) {
-            file.write(&segment[i].payload[0], strlen(segment[i].payload));
+            uint16_t write_size = strlen(segment[i].payload);
+            if (write_size >= 1024) {
+                write_size = 1024;
+            }
+            file.write(&segment[i].payload[0], write_size);
         }
         file.close();
     }
