@@ -154,7 +154,7 @@ public:
             if (i_length >= 1024)
                 i_length = 1024;
             
-            if (((ntohs(m_packets_s[i].m_seq) + i_length) %MAX_SEQ_NO) == ackNo)
+            if (((ntohs(m_packets_s[i].m_seq) + i_length) % MAX_SEQ_NO) == ackNo)
             {
                 seqNo_s = ackNo;
                 no_timeouts = 0;
@@ -244,6 +244,7 @@ public:
         {
             pkt.m_seq = htons(seqNo_s);
         }
+        
         pkt.m_ack = htons(0x0);
         pkt.m_flags = htons(0x0);
         m_packets_s.push_back(pkt);
@@ -266,17 +267,23 @@ public:
         {
             if (ntohs(m_packets_s[i].m_seq) == seqNo)
             {
+                window_pointer++;
                 return m_packets_s[i];
             }
         }
         cout << "not finding anything" <<endl;
-        window_pointer ++;
+        
         //return NULL;
     }
-    uint16_t getNextSeqNo()
+    uint16_t retransmitSeqNo()
     {
         // return sequence number for next packet, which should be updated correctly each time
         return seqNo_s;
+    }
+    
+    uint16_t getNextSeqNo()
+    {
+        return ntohs(m_packets_s[window_pointer].m_seq);
     }
     void setCongWindSize(uint16_t window_size)
     {
@@ -462,6 +469,7 @@ int main(int argc, char* argv[])
         }
         
         if (nReadyFds == 0) {
+            cout << "TIMEOUT HAPPENS" <<endl;
             if(state == SYNACK_SENT)
             {
                 HeaderPacket resp_pkt_synack;
@@ -621,6 +629,8 @@ int main(int argc, char* argv[])
                                 clock_t t = clock();
                                 
                                 mybuffer.record_start(seq, clock());
+                                
+                                cout << "Send out data packet " << seq << endl;
                                 
                                 if(sendto(sockfd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr*) &clientAddr, clilen)<0)
                                 {
