@@ -297,6 +297,7 @@ public:
     
     bool switch_to_read()
     {
+        cout << "Window end is "<<window_end << " and window pointer is "<<window_pointer <<endl;
         return window_pointer == window_end;
     }
     
@@ -448,14 +449,15 @@ int main(int argc, char* argv[])
     tv.tv_sec = 0;
     tv.tv_usec = 500000;
     
+    if(!FD_ISSET(sockfd, &readFds))
+        FD_SET(sockfd, &readFds);
 
     while (true) {
         int nReadyFds = 0;
         errFds = watchFds;
         if(!FD_ISSET(sockfd, &watchFds))
             FD_SET(sockfd, &watchFds);
-        if(!FD_ISSET(sockfd, &readFds))
-            FD_SET(sockfd, &readFds);
+        
         if(finish)
         {
             cout << "Time to close the connection"<<endl;
