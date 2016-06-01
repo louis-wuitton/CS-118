@@ -143,12 +143,27 @@ void doHttp(std::string url, int current, int total)
     j=0;
     
     char fname[100] = {'\0'};
-    while(url[i] != '\0')
+    
+    //traverse from the end
+    int url_len = url.length();
+    i = url_len -1;
+    while(url[i] != '/')
+    {
+        i--;
+    }
+    i++;
+    while(url[i]!='\0')
     {
         fname[j] = url[i];
-        j++;
         i++;
+        j++;
     }
+    
+    /*
+    for(int k = 0; k < strlen(fname); k++)
+            std::cout << fname[k];
+    std::cout << std::endl;
+    */
     
     if((persistent_flag==0) || (persistent_flag==1 && current == 1))
         do_connect(hostname, portno);
@@ -161,14 +176,14 @@ void doHttp(std::string url, int current, int total)
     if(persistent_flag)
     {
         if(current == total)
-            request.setHeader("Connection", "close");
+            request.setHeader("Connection", "Close");
         else
-            request.setHeader("Connection", "keep-alive");
+            request.setHeader("Connection", "Keep-Alive");
         version.m_versionstr = "HTTP/1.1";
     }
     else
     {
-        request.setHeader("Connection", "close");
+        request.setHeader("Connection", "Close");
         version.m_versionstr = "HTTP/1.0";
     }
     request.setVersion(version);
@@ -301,7 +316,7 @@ void doHttp(std::string url, int current, int total)
         }
     }
     
-    if(response.getMap("Connection") == "close")
+    if(response.getMap("Connection") == "Close")
     {
         close(sockfd);
     }
@@ -376,14 +391,14 @@ void do_pipe(std::vector <std::string> urls)
         if(persistent_flag)
         {
             if(current == urls.size())
-                request.setHeader("Connection", "close");
+                request.setHeader("Connection", "Close");
             else
-                request.setHeader("Connection", "keep-alive");
+                request.setHeader("Connection", "Keep-Alive");
             version.m_versionstr = "HTTP/1.1";
         }
         else
         {
-            request.setHeader("Connection", "close");
+            request.setHeader("Connection", "Close");
             version.m_versionstr = "HTTP/1.0";
         }
         request.setVersion(version);
@@ -499,7 +514,7 @@ void do_pipe(std::vector <std::string> urls)
             }
         }
 
-        if(response.getMap("Connection") == "close")
+        if(response.getMap("Connection") == "Close")
             close(sockfd);
     }
     rec_wire.clear();

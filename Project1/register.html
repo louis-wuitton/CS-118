@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<link rel="stylesheet" href="bootstrap.min.css">
+	<meta charset="UTF-8">
+	<script src="https://ajax.googleapis.com/ajax/libs/jquery/1.12.0/jquery.min.js"></script>
+	<title>Register Form</title>
+</head>
+
+
+
+<body>
+	<nav class="navbar navbar-default">
+		<div class="container-fluid">
+		    <div class="navbar-header">
+			<button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target="#bs-example-navbar-collapse-1">
+			   <span class="sr-only">Toggle navigation</span>
+			   <span class="icon-bar"></span>
+			   <span class="icon-bar"></span>
+			   <span class="icon-bar"></span>
+			</button>
+			<a class=navbar-brand href='/'>NRL Underwater Lab</a>
+		    </div>
+		    <div class="collapse navbar-collapse" id="bs-example-navbar-collapse-1">
+                    	<ul class="nav navbar-nav">
+                        	<li><a href="/">Home<span class="sr-only">(current)</span></a></li>
+                        <li><a href="/search.html">Experiment</a></li>
+                        <li class="active"><a href="/register.html">Register</a></li>
+                    </ul>
+                </div>
+		</div>
+	</nav>
+	<div class="container">
+	   <h1>Underwater Network Experiment Registration Form</h1>
+	   <div class="well bs-component">
+	   <form method='post' action='sshUser_submit.php' class="form-horizontal">
+	      <fieldset>
+		<legend>Please enter the following</legend>
+		<div class="form-group">
+		<label for="firstname" class="col-sm-4 control-label">First Name (less than 20 letters): <span class="required">*</span></label>
+		<div class="col-sm-5 col-offset-sm-2">
+			<input type="text" class="form-control" name="firstname">
+		</div>
+	    </div>
+
+	    <div class="form-group">
+	        <label for="lastname" class="col-sm-4 control-label">Last Name (less than 20 letters): <span class="required">*</span></label>
+		<div class="col-sm-5 col-offset-sm-2">
+			<input type="text" class="form-control" name="lastname">
+	    	</div>
+	    </div>
+
+
+	    <div class="form-group">
+		<label for="username" class="col-sm-4 control-label">User Name (less than 20 letters): <span class="required">*</span></label>
+		<div class="col-sm-5 col-offset-sm-2">
+			<input type="text" class="form-control" name="username">
+	    	</div>
+	    </div>
+
+
+	    <div class="form-group">
+		<label for="email" class="col-sm-4 control-label">Email (less than 20 letters): <span class="required">*</span></label>
+		<div class="col-sm-5 col-offset-sm-2">
+			<input type="text" name="email" class="form-control">
+	    	</div>
+	    </div>
+
+	    <div class="form-group">
+		<label for=affiliation" class="col-sm-4 control-label">Affiliation (less than 50 letters):</label>
+		<div class="col-sm-5 col-offset-sm-2">
+			<input type="text" name="affiliation" class="form-control">
+	    	</div>
+	    </div>
+	    <div class="form-group">
+		<div class="col-sm-4 col-sm-offset-5">
+	       <button type="reset" class="btn btn-default">Cancel</button>
+	       <button class="btn btn-primary" type="submit" value="Submit">Submit</button>
+	    	<!--<input type="submit" value="Submit">-->
+	     </div>
+	     </div>
+	    </fieldset>
+	</form>
+	</div>
+	</div>
+</body>
+</html>

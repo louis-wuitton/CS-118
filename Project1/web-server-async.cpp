@@ -252,10 +252,10 @@ main(int argc, char* argv[])
                             HttpStatus status;
                             bool set_status = false;
                             
-                            if(request.getMap("Connection") == "keep-alive")
-                                response.setHeader("Connection", "keep-alive");
-                            else if(request.getMap("Connection") == "close")
-                                response.setHeader("Connection", "close");
+                            if(request.getMap("Connection") == "Keep-Alive")
+                                response.setHeader("Connection", "Keep-Alive");
+                            else if(request.getMap("Connection") == "Close")
+                                response.setHeader("Connection", "Close");
                             else
                             {
                                 if(set_status == false){
