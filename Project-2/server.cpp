@@ -15,7 +15,13 @@
 #include <vector>
 #include <sstream>
 #include <fstream>
+#include <ctime>
+#include <cmath>
+#include <math.h>
 #include "packet.h"
+
+
+//this one implement advanced version
 
 //defining flags and useful numbers
 #define SYN 0x4
@@ -24,6 +30,7 @@
 #define SYNACK 0x6
 #define FINACK 0x3
 #define MAX_NO_TIMEOUTS 3
+
 //#define MAX_PACKET_SIZE 1024
 
 
@@ -33,7 +40,16 @@
 #define CONNECTED 32
 #define SENT_FIN 33
 
+#define MAX_SEQ_NO 30720
+#define MAX_CONGESTION_WINDOW 15360
+
 using namespace std;
+
+
+struct exe_time
+{
+    clock_t begin;
+};
 
 
 // random number generator: used to generate initial sequence number
@@ -51,29 +67,40 @@ public:
     bool hasMore();
 private:
     char m_name[100] = {'\0'};
+    char* filecontent;
     long m_position;
     long f_size;
 };
 
 void FileReader::openfile(char* name)
 {
-    strcpy(m_name, name);
-    FILE* pfile = fopen(m_name, "r");
-    if(pfile == NULL)
+    ifstream m_file;
+    m_file.open(name, ifstream::in | ifstream::binary | ifstream::out);
+    if(!m_file.is_open())
     {
         cerr << "Fail to open the file" <<endl;
     }
-    fseek(pfile, 0, SEEK_END);
-    f_size = ftell(pfile);
-    cout << "filesize now is "<<f_size <<endl;
-    rewind(pfile);
+    //fseek(pfile, 0, SEEK_END);
+    strcpy(m_name, name);
+    m_file.seekg (0, m_file.end);
+    m_position = 0;
+    f_size = m_file.tellg();
+    cout << "file size is "<<f_size <<endl;
+    m_file.seekg(0, m_file.beg);
+    //cout << "filesize now is "<<f_size <<endl;
+    
+    filecontent = new char[f_size+1];
+    
+    m_file.read(filecontent, f_size);
+    
+    m_file.close();
 }
 
 
 HeaderPacket FileReader::top()
 {
-    FILE* pfile = fopen(m_name, "r");
     HeaderPacket segment;
+   // m_file.seekg(m_position, m_file.beg);
     memset(segment.payload, '\0', sizeof(segment.payload));
     int readsize;
     if(f_size - m_position < 1024)
@@ -81,12 +108,20 @@ HeaderPacket FileReader::top()
     else
         readsize = 1024;
     
-    if (!feof(pfile)) {
-        fseek(pfile, m_position*1,SEEK_SET);
-        fread(segment.payload, 1, readsize, pfile);
-    }
+    cout << "right now the position is "<<m_position <<endl;
+
+    memcpy(segment.payload, &filecontent[m_position],readsize);
     //m_position += readsize;
-    //segment.m_seq = htons(readsize);
+    cout << "length is " << strlen(segment.payload) << endl;
+
+    /*
+    cout << "print out payload" <<endl;
+    for(int i = 0; i < readsize; i++)
+    {
+        cout << segment.payload[i];
+    }
+    cout << endl;
+     */
     return segment;
 }
 
@@ -99,7 +134,10 @@ bool FileReader::hasMore()
 {
     
     if(m_position >= f_size)
+    {
+        cout << "POSITION IS CURRENTLY :" << m_position <<endl;
         return false;
+    }
     else
         return true;
 }
@@ -113,8 +151,10 @@ public:
         cur_cong_window = 0;
         window_begin = 0;
         window_end = 0;
+        window_pointer = window_begin;
         no_timeouts = 0;
         slow_start_threshold = 30720;
+        repeat_count = 0;
     }
     void setInitSeq(uint16_t seqNo)
     {
@@ -122,36 +162,83 @@ public:
     }
     void ack(uint16_t ackNo)
     {
-        // Check to see if the ACK number matches with what is expected
-        uint16_t begin_length = strlen(m_packets_s[window_begin].payload);
-        if (begin_length >= 1024)
-            begin_length = 1024;
-        cout << "try to ack " << ackNo <<endl;
-        cout << "Beginning window seq number is " << ntohs(m_packets_s[window_begin].m_seq) << " and this window is number " << window_begin  <<endl;
-        cout << "current buffer size is " << m_packets_s.size()<<endl;
-        if ((ntohs(m_packets_s[window_begin].m_seq) + begin_length) == ackNo)
+         //cout <<"Current congestion window size is "<<cong_window_size <<endl;
+        if(ntohs(m_packets_s[window_begin].m_seq) == ackNo)
         {
-            // set our current sequence number to the ACK number
-            cout << "the if statement in ack pass" <<endl;
-            seqNo_s = ackNo;
-            // also have to reset timeout counter
-            no_timeouts = 0;
-            // also have to reduce current congestion window
-            cur_cong_window -= begin_length;
-            window_begin++;
+            repeat_count++;
+        }
+        else
+        {
+            repeat_count = 0;
+        }
+        
+        for (int i = window_begin; i <= window_pointer; i++)
+        {
+            uint16_t i_length = strlen(m_packets_s[i].payload);
+            if (i_length >= 1024)
+                i_length = 1024;
             
-            // adjust congestion window size accordingly
-            // slow start case
-            if (cong_window_size <= slow_start_threshold)
+            cout << "right now i_length is " << i_length <<endl;
+            if (((ntohs(m_packets_s[i].m_seq) + i_length) % MAX_SEQ_NO) == ackNo)
             {
-                cong_window_size += 1024;
-                cout <<"congestion window size is "<<cong_window_size <<endl;
-            }
-            else // congestion avoidance case
-            {
-                cong_window_size +=  ((1/(cong_window_size/1024)) * 1024);
+                cout << "IF STATEMENT PASS " <<endl;
+                seqNo_s = ackNo;
+                no_timeouts = 0;
+                
+                if(i == window_begin)
+                {
+                    window_begin++;
+                
+                    cur_cong_window -= i_length;
+                    if (cong_window_size <= slow_start_threshold)
+                    {
+                        cong_window_size += 1024;
+                        if(cong_window_size > MAX_CONGESTION_WINDOW)
+                            cong_window_size = MAX_CONGESTION_WINDOW;
+                        cout <<"Updated congestion window size is "<<cong_window_size <<endl;
+                    }
+                    else // congestion avoidance case
+                    {
+                        cong_window_size +=  ((1/(cong_window_size/1024)) * 1024);
+                        if(cong_window_size > MAX_CONGESTION_WINDOW)
+                            cong_window_size = MAX_CONGESTION_WINDOW;
+                        cout <<"Updated congestion window size is "<<cong_window_size <<endl;
+                    }
+                }
+                else if(i <= window_pointer)
+                {
+                    uint16_t offset = i - window_begin;
+                    for (int j = window_begin; j <= i; j++)
+                    {
+                        uint16_t j_length = strlen(m_packets_s[j].payload);
+                        if(j_length >= 1024)
+                            j_length = 1024;
+                        cur_cong_window -= j_length;
+                        
+                        if (cong_window_size <= slow_start_threshold)
+                        {
+                            cong_window_size += 1024;
+                             if(cong_window_size > MAX_CONGESTION_WINDOW)
+                                cong_window_size = MAX_CONGESTION_WINDOW;
+                            cout <<"Updated congestion window size is "<<cong_window_size <<endl;
+                        }
+                        else // congestion avoidance case
+                        {
+                            cong_window_size +=  ((1/(cong_window_size/1024)) * 1024);
+                            if(cong_window_size > MAX_CONGESTION_WINDOW)
+                                cong_window_size = MAX_CONGESTION_WINDOW;
+                            cout <<"Updated congestion window size is "<<cong_window_size <<endl;
+                        }
+                    }
+                    window_begin += offset;
+                }
             }
         }
+    }
+    
+    bool should_retransmit()
+    {
+        return repeat_count == 3;
     }
 
     bool timeout()
@@ -162,8 +249,11 @@ public:
         cong_window_size = 1024;
         // also need to reset current congestion window size: restart sending from packet that timed out
         cur_cong_window = 0;
-        window_end = window_begin; // part of restarting send from packet that timed out
+        window_end = window_begin;
+        window_pointer = window_begin;
         
+        
+        //seqNo_s
         no_timeouts++;
         return no_timeouts == MAX_NO_TIMEOUTS;
     }
@@ -178,6 +268,7 @@ public:
     void insert(HeaderPacket pkt)
     {
         //insert the data packet into the buffer
+        
         if(!m_packets_s.empty())
         {
             int bufsize = m_packets_s.size();
@@ -186,40 +277,63 @@ public:
             if(add_on >= 1024){
                 add_on = 1024;
             }
-            uint16_t new_seq = ntohs(m_packets_s[bufsize-1].m_seq) + add_on;
+            uint16_t new_seq = (ntohs(m_packets_s[bufsize-1].m_seq) + add_on) % MAX_SEQ_NO;
             pkt.m_seq = htons(new_seq);
         }
         else
         {
             pkt.m_seq = htons(seqNo_s);
         }
+        
         pkt.m_ack = htons(0x0);
         pkt.m_flags = htons(0x0);
         m_packets_s.push_back(pkt);
+        //insert time as well
+        exe_time timeslot;
+        m_time.push_back(timeslot);
         window_end++;
         cur_cong_window += strlen(pkt.payload);
     }
     
     bool hasNext()
     {
-        return (window_begin != window_end) && (cur_cong_window != 0);
+        cout << "window begin is " << window_begin <<endl;
+        bool result = (window_begin != window_end) && (cur_cong_window != 0);
+        if(result)
+        {
+            cout << "There is next "<<endl;
+        }
+        else
+        {
+            cout << "Has next gives false, should switch to fin now" <<endl;
+        }
+        return result;
     }
+    
+    
     HeaderPacket getPkt(uint16_t seqNo)
     {
-        for (uint16_t i = 0; i <m_packets_s.size(); i++)
+        for (uint16_t i = window_begin; i <= window_end; i++)
         {
             if (ntohs(m_packets_s[i].m_seq) == seqNo)
             {
+                window_pointer++;
                 return m_packets_s[i];
             }
         }
         cout << "not finding anything" <<endl;
+        
         //return NULL;
     }
-    uint16_t getNextSeqNo()
+    uint16_t retcumulative()
     {
         // return sequence number for next packet, which should be updated correctly each time
         return seqNo_s;
+    }
+    
+    uint16_t getNextSeqNo()
+    {
+        return ntohs(m_packets_s[window_pointer].m_seq);
     }
     void setCongWindSize(uint16_t window_size)
     {
@@ -231,17 +345,59 @@ public:
         return cong_window_size;
     }
     
+    bool switch_to_read()
+    {
+        cout << "Window end is "<<window_end << " and window pointer is "<<window_pointer <<endl;
+        return window_pointer == window_end;
+    }
+    
+    bool switch_to_write()
+    {
+        return window_begin == window_pointer;
+    }
+    void reset_pointer()
+    {
+        window_pointer = window_begin;
+    }
+    
+    
+    void record_start(uint16_t seq, double begin)
+    {
+        for (int i = window_pointer; i < window_end; i++) {
+            if(ntohs(m_packets_s[i].m_seq) == seq)
+            {
+                m_time[i].begin = begin;
+                break;
+            }
+        }
+    }
+    double get_duration(uint16_t ack, double end)
+    {
+        for(int i = window_begin; i<=window_pointer; i++)
+        {
+            uint16_t i_size = strlen(m_packets_s[i].payload);
+            if (i_size >= 1024)
+                i_size = 1024;
+            if(ntohs(m_packets_s[i].m_seq) + i_size == ack)
+            {
+                return (end - m_time[i].begin)/(double) CLOCKS_PER_SEC;
+            }
+        }
+    }
+    
+    
 private:
     vector<HeaderPacket> m_packets_s;
+    vector<exe_time> m_time;
     uint16_t seqNo_s;
     double cong_window_size; // in number of bytes
     double cur_cong_window; // number of bytes currently in congestion window
-    // These next two are needed because I am not deleting packets from our m_packets_s vector once they are ACK'ed
-    // I am simply incrementing an index to adjust the window to the currently sending window
     uint16_t window_begin; // index of current beginning of window
     uint16_t window_end; // index of current end of window
+    uint16_t window_pointer;
     uint16_t no_timeouts; // number of timeouts
     double slow_start_threshold;
+    uint16_t repeat_count;
 };
 
 int main(int argc, char* argv[])
@@ -283,16 +439,10 @@ int main(int argc, char* argv[])
         return 2;
     }
     
-    // handle initial SYN request
-    // placed this outside event loop because it would be hard to start up
-    // the server and the client within the 500ms timeout window otherwise
     HeaderPacket req_pkt_syn;
     struct sockaddr_in clientAddr;
     socklen_t clilen = sizeof(clientAddr);
-    /*
-    memset((char*)&clientAddr, 0, sizeof(clientAddr));
-    servaddr.sin_family = AF_INET;
-    */
+
     OutputBuffer mybuffer;
     mybuffer.setup();
     uint16_t state = NO_CONNECTION;
@@ -327,7 +477,6 @@ int main(int argc, char* argv[])
         state = SYNACK_SENT;
     }
     
-    
     fd_set readFds;
     fd_set writeFds;
     fd_set errFds;
@@ -342,20 +491,24 @@ int main(int argc, char* argv[])
     
     bool finish = false;
     
+    
+    double sRTT = 3;
+    double devRtt = 3;
 
     struct timeval tv;
-    tv.tv_sec = 0;
-    tv.tv_usec = 500000;
+   
     
+    if(!FD_ISSET(sockfd, &readFds))
+        FD_SET(sockfd, &readFds);
 
-    while (true) { // event loop
-        // setting up select() call
+    while (true) {
         int nReadyFds = 0;
         errFds = watchFds;
         if(!FD_ISSET(sockfd, &watchFds))
             FD_SET(sockfd, &watchFds);
-        if(!FD_ISSET(sockfd, &readFds))
-            FD_SET(sockfd, &readFds);
+        
+        tv.tv_sec = 0;
+        tv.tv_usec = 500000;
         if(finish)
         {
             cout << "Time to close the connection"<<endl;
@@ -363,12 +516,13 @@ int main(int argc, char* argv[])
             break;
         }
 
-        if ((nReadyFds = select(maxSockfd+1, &readFds, &writeFds, &errFds, NULL)) == -1) {
+        if ((nReadyFds = select(maxSockfd+1, &readFds, &writeFds, &errFds, &tv)) == -1) {
             perror("select");
             return 4;
         }
         
         if (nReadyFds == 0) {
+            cout << "TIMEOUT HAPPENS" <<endl;
             if(state == SYNACK_SENT)
             {
                 HeaderPacket resp_pkt_synack;
@@ -381,6 +535,7 @@ int main(int argc, char* argv[])
                     cerr << "Sendto fails" << endl;
                     return 1;
                 }
+                 FD_SET(sockfd, &readFds);
             }
             else if (state == SENT_FIN)
             {
@@ -394,7 +549,7 @@ int main(int argc, char* argv[])
                     cerr << "Sendto fails" << endl;
                     return 1;
                 }
-
+                 FD_SET(sockfd, &readFds);
                 
             }
             else if (state == CONNECTED)
@@ -402,23 +557,26 @@ int main(int argc, char* argv[])
                 if(mybuffer.timeout())
                 {
                     FD_CLR(sockfd, &readFds);
+                    //close after several retrials
                     close(sockfd);
                     break;
                 }
                 else
                 {
-                    uint16_t seq = mybuffer.getNextSeqNo();
+                    uint16_t seq = mybuffer.retcumulative();
                     HeaderPacket res_pkt = mybuffer.getPkt(seq);
                     res_pkt.m_seq = htons(seq);
                     //res_pkt.m_window = htons(mybuffer.getWindowSize());
+                    mybuffer.reset_pointer();
                     if(sendto(sockfd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr*) &clientAddr, clilen)<0)
                     {
                         cerr << "Sendto fails" << endl;
                         return 1;
                     }
+                    FD_ZERO(&readFds);//clear the read set cuz we gonna retransmit again 
+                    FD_SET(sockfd, &writeFds);
                 }
             }
-            break;
         }
         else
         {
@@ -438,6 +596,7 @@ int main(int argc, char* argv[])
                         {
                             case SYNACK:
                             {
+                                cout << "Receiveing SYNACK packet "<< ntohs(req_pkt.m_ack)<<endl;
                                 mybuffer.setInitSeq(ntohs(req_pkt.m_ack));
                                 if(myreader.hasMore())
                                 {
@@ -457,6 +616,23 @@ int main(int argc, char* argv[])
                             {
                                 cout << "Receiving ACK packet "<< ntohs(req_pkt.m_ack)<<endl;
                                 mybuffer.ack(ntohs(req_pkt.m_ack));
+                                
+                                /*
+                                clock_t end = clock();
+                                //reset the timeout
+                                double sampleRTT = mybuffer.get_duration(ntohs(req_pkt.m_ack), end);
+                                //now update the waiting time
+                                
+                                double difference = sampleRTT - sRTT;
+                                sRTT = sRTT + 0.125 * (difference);
+                                devRtt = devRtt + 0.25 * (abs(difference) - devRtt);
+                                double ret_to = sRTT + 4* devRtt;
+                                
+                                double intpart, fracpart;
+                                fracpart = modf(ret_to, &intpart);
+                                tv.tv_sec = (time_t) intpart;
+                                tv.tv_usec = (time_t) 1000000*fracpart;
+                                */
                                 while(myreader.hasMore() && mybuffer.hasSpace(strlen(myreader.top().payload)))
                                 {
                                     cout << "let's do some insert" <<endl;
@@ -468,8 +644,14 @@ int main(int argc, char* argv[])
                                     cout <<"change state to finish"<<endl;
                                     state = SENT_FIN;
                                 }
-                                FD_CLR(fd, &readFds);
-                                FD_SET(fd, &writeFds);
+                            
+                                //don't do write until you ack all the packets you just sent out
+                                if(mybuffer.switch_to_write())
+                                {
+                                    cout << "SWITCH TO WRITE STATE " <<endl;
+                                    FD_CLR(fd, &readFds);
+                                    FD_SET(fd, &writeFds);
+                                }
                                 break;
                             }
                             case FINACK:
@@ -484,30 +666,52 @@ int main(int argc, char* argv[])
                         }
                     }
                     
-            }
+                }
                 
                 else if(FD_ISSET(fd, &writeFds)) // writing, sendto cases
                 {
                         cout <<"Do some write" <<endl;
-                        uint16_t seq = mybuffer.getNextSeqNo();
+
                         HeaderPacket res_pkt;
                         switch(state)
                         {
                             case CONNECTED:
                             {
+                                uint16_t seq = mybuffer.getNextSeqNo();
                                 cout <<"state is connected"<<endl;
                                 res_pkt = mybuffer.getPkt(seq); // initial sequence number
-                                cout << "Sending data packet " << seq << endl;
-                                cout << "But the actual packet's seq no is " << ntohs(res_pkt.m_seq) <<endl;
+                            
+                               // clock_t t = clock();
+                                
+                                ///mybuffer.record_start(seq, clock());
+                                
+                                cout << "Send out data packet " << seq << endl;
+                                
+                                cout << "print out payload" <<endl;
+                                int p_size = strlen(res_pkt.payload);
+                                if(p_size >1024)
+                                    p_size = 1024;
+                                for (int i = 0; i<p_size; i++) {
+                                    cout << res_pkt.payload[i];
+                                }
+                                cout << endl;
+                                
                                 if(sendto(sockfd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr*) &clientAddr, clilen)<0)
                                 {
                                     cerr << "Sendto fails" << endl;
                                     return 1;
                                 }
+                                if(mybuffer.switch_to_read())
+                                {
+                                    cout << "SWITCH TO READ STATE" <<endl;
+                                    FD_CLR(fd, &writeFds);
+                                    FD_SET(fd, &readFds);
+                                }
                                 break;
                             }
                             case SENT_FIN:
                             {
+                                uint16_t seq = mybuffer.retcumulative();
                                 cout << "state is fin now" <<endl;
                                 res_pkt.m_seq = htons(seq);
                                 //res_pkt.m_window = htons(getWindowSize());
@@ -519,18 +723,16 @@ int main(int argc, char* argv[])
                                     cerr << "Sendto fails" << endl;
                                     return 1;
                                 }
+                                FD_CLR(fd, &writeFds);
+                                FD_SET(fd, &readFds);
                                 break;
                             }
                         }
                             
-                            FD_CLR(fd, &writeFds);
-                            FD_SET(fd, &readFds);
-                            
-                    } // closing brace for elseif writing, sendto cases
-            } // closing brace for for loop, non-timeout cases
-        } // closing brace for else, non-timeout cases
-     } //closing brace for while loop, event loop
+                    }
+            }
+        }
+     }
     
     close(sockfd);
-    }// closing brace for main function
-            
+    }

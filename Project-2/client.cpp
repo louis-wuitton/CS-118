@@ -23,11 +23,20 @@
 #define FIN 0x1
 #define FINACK 0x3
 #define RECV_WINDOW 30720
+#define MAX_SEQ_NO 30720
+#define MAX_PACKET_SIZE 1024
+#define SENDSYN 32
+#define SYNACK_RECEIVED 33
+#define FIN_RECEIVED 34
 
 using namespace std;
 
 
-
+struct received_packet
+{
+    int m_seq;
+    char payload[MAX_PACKET_SIZE];
+};
 
 class ReceivingBuffer
 {
@@ -35,16 +44,21 @@ class ReceivingBuffer
         void setInitSeq(uint16_t seqNo)
         {
             ini_seq = seqNo;
+            round_counter = 0;
         }
         uint16_t insert(uint16_t seqNo, HeaderPacket packet)
         {
+            received_packet new_packet;
+            memset(received_packet.payload, '\0', sizeof(received_packet.payload));
+            strcpy(new_packet.payload, packet.payload);
             
             if(m_segments.empty())
             {
-                m_segments.push_back(packet);
+                new_packet.m_seq = seqNo;
+                m_segments.push_back(new_packet);
                 if(seqNo == ini_seq+1)
                 {
-                    if(strlen(packet.payload) < 1024)
+                    if(strlen(new_packet.payload) < 1024)
                         return seqNo + strlen(packet.payload);
                     else
                         return seqNo + 1024;
@@ -54,20 +68,51 @@ class ReceivingBuffer
             }
             
 
-            vector<HeaderPacket>::iterator it = m_segments.begin();
+            int packet_size = strlen(new_packet.payload);
+            if (packet_size > 1024) {
+                packet_size = 1024;
+            }
+            
+            int seq_32 = seqNo;
+            int cumuseq = seq_32 + round_counter;
+            new_packet.m_seq = cumuseq;
+            
+            
+            cout << "Receive packet with payload size " << packet_size<<endl;
+            vector<received_packet>::iterator it = m_segments.begin();
+            
+            cout << "Receiving buffer has size of " << m_segments.size() << endl;
+            
             int i = 0;
             uint16_t return_val;
             while (i < m_segments.size())
             {
-                if(ntohs(m_segments[i].m_seq)> seqNo)
+                if(m_segments[i].m_seq > cumuseq)
                 {
-                    m_segments.insert(it+i, packet);
+                    m_segments.insert(it+i, new_packet);
                     break;
                 }
+                //it's possible that the ack gets lost, so the sender send the packet again
+                /*
+                else if(ntohs(m_segments[i].m_seq) == seqNo)
+                {
+                    uint16_t segsize = strlen(m_segments[i].payload);
+                    if(segsize >= 1024)
+                        segsize = 1024;
+                    return (ntohs(m_segments[i].m_seq)+segsize) % MAX_SEQ_NO;
+                }
+                 */
                 i++;
             }
             if(i == m_segments.size())
-                m_segments.push_back(packet);
+                m_segments.push_back(new_packet);
+            
+            
+            if((seqNo + packet_size) > MAX_SEQ_NO)
+            {
+                round_counter += MAX_SEQ_NO;
+            }
+            
             
             int j;
             uint16_t segsize;
@@ -75,23 +120,24 @@ class ReceivingBuffer
                 segsize = strlen(m_segments[j].payload);
                 if(segsize >= 1024)
                     segsize = 1024;
-                if((ntohs(m_segments[j].m_seq)+segsize) != ntohs(m_segments[j+1].m_seq))
+                if((m_segments[j].m_seq+segsize) != m_segments[j+1].m_seq)
                 {
                     cout << "mismatch" <<endl;
-                    return ntohs(m_segments[j].m_seq)+segsize;
+                    return (m_segments[j].m_seq+segsize) % MAX_SEQ_NO;
                 }
             }
             segsize = strlen(m_segments[j].payload);
             if(segsize >= 1024)
                 segsize = 1024;
-            return ntohs(m_segments[j].m_seq) + segsize;
+            return (m_segments[j].m_seq + segsize) % MAX_SEQ_NO;
         }
-        vector<HeaderPacket> getSegments()
+        vector<received_packet> getSegments()
         {
             return m_segments;
         }
     private:
-    vector<HeaderPacket> m_segments;
+    vector<received_packet> m_segments;
+    int round_counter;
     int ini_seq;
 };
 
@@ -180,10 +226,7 @@ int main(int argc, char* argv[])
     uint16_t writestate;
     uint16_t next_ack;
    // uint16_t next_seq;
-    bool finish = false;
-    
-    
-    
+    //bool finish = false;
     HeaderPacket req_pkt;
     req_pkt.m_seq = htons(0);
     req_pkt.m_ack = htons(0);
@@ -195,17 +238,22 @@ int main(int argc, char* argv[])
         return 1;
     }
     FD_SET(sockfd, &readFds);
-    
+    int state = SENDSYN;
     while (true) {
         int nReadyFds = 0;
-        if(!finish)
+        if(state == SENDSYN)
         {
             tv.tv_sec = 0;
             tv.tv_usec = 500000;
         }
-        else
+        else if (state == SYNACK_RECEIVED)
         {
-            tv.tv_sec = 2;
+            tv.tv_sec = 30;
+            tv.tv_usec = 0;
+        }
+        else if(state == FIN_RECEIVED)
+        {
+            tv.tv_sec = 3;
             tv.tv_usec = 0;
         }
         if(!FD_ISSET(sockfd, &watchFds))
@@ -217,13 +265,15 @@ int main(int argc, char* argv[])
         }
         if(nReadyFds == 0)
         {
-            if(finish)
+            cout << "TIMEOUT HAPPENS TO THE CLIENT" <<endl;
+            if(state == FIN_RECEIVED || state ==SYNACK_RECEIVED)
             {
                 FD_CLR(sockfd, &readFds);
                 close(sockfd);
                 break;
             }
-            else {
+            if (state == SENDSYN)
+            {
                 HeaderPacket req_pkt;
                 req_pkt.m_seq = htons(genRanfom());
                 req_pkt.m_ack = htons(0);
@@ -295,7 +345,7 @@ int main(int argc, char* argv[])
                                 cerr<<"Sendto fails" <<endl;
                                 return 1;
                             }
-                            
+                            state = SYNACK_RECEIVED;
                             break;
                         }
                         case PACKET:{
@@ -323,7 +373,8 @@ int main(int argc, char* argv[])
                             req_pkt.m_ack = htons(next_ack);
                             req_pkt.m_window = htons(RECV_WINDOW);
                             req_pkt.m_flags = htons(FINACK);
-                            finish = true;
+                            //finish = true;
+                            state = FIN_RECEIVED;
                             cout <<"Sending ACK packet " << ntohs(req_pkt.m_ack) <<endl;
                             if(sendto(fd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr, serlen)<0)
                             {
@@ -357,7 +408,7 @@ int main(int argc, char* argv[])
     {
         ofstream file;
         file.open ("received.data",ofstream::out | ofstream::app | ofstream::binary );
-        vector<HeaderPacket> segment = recv_buffer.getSegments();
+        vector<received_packet> segment = recv_buffer.getSegments();
         //print out content
         for (int i = 0; i < segment.size(); i++) {
             uint16_t write_size = strlen(segment[i].payload);
