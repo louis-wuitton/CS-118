@@ -24,6 +24,7 @@
 #define FINACK 0x3
 #define RECV_WINDOW 30720
 #define MAX_SEQ_NO 30720
+#define HALF_WAY_POINT 15360
 #define MAX_PACKET_SIZE 1024
 #define SENDSYN 32
 #define SYNACK_RECEIVED 33
@@ -45,12 +46,16 @@ class ReceivingBuffer
         {
             ini_seq = seqNo;
             round_counter = 0;
+            new_round = false;
         }
         uint16_t insert(uint16_t seqNo, HeaderPacket packet)
         {
             received_packet new_packet;
-            memset(received_packet.payload, '\0', sizeof(received_packet.payload));
+            memset(new_packet.payload, '\0', sizeof(new_packet.payload));
             strcpy(new_packet.payload, packet.payload);
+            uint16_t pkt_size = strlen(packet.payload);
+            if(pkt_size >= MAX_PACKET_SIZE)
+                pkt_size = MAX_PACKET_SIZE;
             
             if(m_segments.empty())
             {
@@ -67,52 +72,65 @@ class ReceivingBuffer
                     return ini_seq + 1;
             }
             
-
-            int packet_size = strlen(new_packet.payload);
-            if (packet_size > 1024) {
-                packet_size = 1024;
-            }
-            
             int seq_32 = seqNo;
-            int cumuseq = seq_32 + round_counter;
+            int cumuseq;
+            if(seq_32 + pkt_size >= MAX_SEQ_NO && (new_round == false))
+            {
+                new_round = true;
+                cumuseq = seq_32 + round_counter;
+                round_counter += MAX_SEQ_NO;
+            }
+            else
+            {
+                if(new_round)
+                {
+                    if(seq_32 < HALF_WAY_POINT)
+                        cumuseq = seq_32 + round_counter;
+                    else
+                        cumuseq = seq_32 + round_counter - MAX_SEQ_NO;
+                }
+                else
+                {
+                    if(round_counter == 0)
+                    {
+                        cumuseq = seq_32;
+                    }
+                    else
+                    {
+                        if(seq_32 < HALF_WAY_POINT)
+                            cumuseq = seq_32 + round_counter + MAX_SEQ_NO;
+                        else
+                            cumuseq = seq_32 + round_counter;
+                    }
+                }
+            }
             new_packet.m_seq = cumuseq;
             
-            
-            cout << "Receive packet with payload size " << packet_size<<endl;
             vector<received_packet>::iterator it = m_segments.begin();
-            
-            cout << "Receiving buffer has size of " << m_segments.size() << endl;
-            
             int i = 0;
-            uint16_t return_val;
             while (i < m_segments.size())
             {
                 if(m_segments[i].m_seq > cumuseq)
                 {
                     m_segments.insert(it+i, new_packet);
+                    cout << "Should insert here with packet " << cumuseq <<"at position " << i <<endl;
                     break;
                 }
-                //it's possible that the ack gets lost, so the sender send the packet again
-                /*
-                else if(ntohs(m_segments[i].m_seq) == seqNo)
+                else if(m_segments[i].m_seq == cumuseq)
                 {
                     uint16_t segsize = strlen(m_segments[i].payload);
                     if(segsize >= 1024)
                         segsize = 1024;
-                    return (ntohs(m_segments[i].m_seq)+segsize) % MAX_SEQ_NO;
+                    return (m_segments[i].m_seq+segsize) % MAX_SEQ_NO;
                 }
-                 */
+                
                 i++;
             }
             if(i == m_segments.size())
-                m_segments.push_back(new_packet);
-            
-            
-            if((seqNo + packet_size) > MAX_SEQ_NO)
             {
-                round_counter += MAX_SEQ_NO;
+                cout << "PUSH THE PACKET TO THE END" <<endl;
+                m_segments.push_back(new_packet);
             }
-            
             
             int j;
             uint16_t segsize;
@@ -121,11 +139,11 @@ class ReceivingBuffer
                 if(segsize >= 1024)
                     segsize = 1024;
                 if((m_segments[j].m_seq+segsize) != m_segments[j+1].m_seq)
-                {
-                    cout << "mismatch" <<endl;
-                    return (m_segments[j].m_seq+segsize) % MAX_SEQ_NO;
-                }
+                    break;
             }
+            if((m_segments[j].m_seq % MAX_SEQ_NO < HALF_WAY_POINT) && new_round == true)
+                new_round = false;
+            
             segsize = strlen(m_segments[j].payload);
             if(segsize >= 1024)
                 segsize = 1024;
@@ -137,6 +155,7 @@ class ReceivingBuffer
         }
     private:
     vector<received_packet> m_segments;
+    bool new_round;
     int round_counter;
     int ini_seq;
 };

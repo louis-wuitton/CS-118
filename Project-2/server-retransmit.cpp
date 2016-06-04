@@ -42,7 +42,6 @@
 
 #define MAX_SEQ_NO 30720
 #define MAX_CONGESTION_WINDOW 15360
-#define HALF_WAY_POINT 15360
 
 using namespace std;
 
@@ -52,13 +51,6 @@ struct exe_time
     clock_t begin;
 };
 
-
-
-struct ack_no
-{
-    int m_ack;
-    int counter;
-};
 
 // random number generator: used to generate initial sequence number
 uint16_t genRandom()
@@ -73,7 +65,6 @@ public:
     HeaderPacket top();
     void pop();
     bool hasMore();
-    void truncate(int position);
 private:
     char m_name[100] = {'\0'};
     char* filecontent;
@@ -102,12 +93,6 @@ void FileReader::openfile(char* name)
     m_file.close();
 }
 
-
-
-void FileReader::truncate(int w_size)
-{
-    m_position = w_size*1024;
-}
 
 HeaderPacket FileReader::top()
 {
@@ -149,7 +134,6 @@ public:
         cur_cong_window = 0;
         window_begin = 0;
         window_end = 0;
-        round_counter = 0;
         window_pointer = window_begin;
         no_timeouts = 0;
         slow_start_threshold = 30720;
@@ -161,143 +145,28 @@ public:
     }
     void ack(uint16_t ackNo)
     {
-        for (int i = window_begin; i < window_end; i++)
+        if(ntohs(m_packets_s[window_begin].m_seq) == ackNo)
+        {
+            repeat_count++;
+        }
+        else
+        {
+            repeat_count = 0;
+        }
+        
+        for (int i = window_begin; i <= window_pointer; i++)
         {
             uint16_t i_length = strlen(m_packets_s[i].payload);
             if (i_length >= 1024)
                 i_length = 1024;
             
+            cout << "right now i_length is " << i_length <<endl;
             if (((ntohs(m_packets_s[i].m_seq) + i_length) % MAX_SEQ_NO) == ackNo)
             {
                 cout << "IF STATEMENT PASS " <<endl;
-                seqNo_s = ackNo; // consider moving this line later
+                seqNo_s = ackNo;
                 no_timeouts = 0;
-    
-                uint16_t begin_payload_length = strlen(m_packets_s[window_begin].payload);
-                if (begin_payload_length >= 1024)
-                    begin_payload_length = 1024;
                 
-                int cumulative_ack;
-                int ack_32 = ackNo;
-                
-                //when you receive
-                // you should not receive the initial syn ack here.
-                
-                // case where you need to update round counter
-                if (ntohs(m_packets_s[window_begin].m_seq) >= HALF_WAY_POINT && ack_32 < HALF_WAY_POINT) {
-                    for (int j = window_begin; j <= i; j++) {
-                        uint16_t current_payload_length = strlen(m_packets_s[j].payload);
-                        if (current_payload_length >= 1024)
-                            current_payload_length = 1024;
-                        
-                        // update round counter if it is the border packet: wrap around case
-                        if (ntohs(m_packets_s[j].m_seq) + current_payload_length > MAX_SEQ_NO)
-                            round_counter += MAX_SEQ_NO;
-                        
-                        // generate ACK to store
-                        uint16_t cur_ack_16 = ntohs(m_packets_s[j].m_seq) + current_payload_length;
-                        int cur_ack_32 = cur_ack_16;
-                        int ack_to_store = cur_ack_32 + round_counter;
-                        
-                        // update congestion window stuff
-                        window_begin++;
-                        cur_cong_window -= current_payload_length;
-                        if (cong_window_size <= slow_start_threshold)
-                        {
-                            cong_window_size += 1024;
-                            if(cong_window_size > MAX_CONGESTION_WINDOW)
-                                cong_window_size = MAX_CONGESTION_WINDOW;
-                            cout <<"Updated congestion window size is "<<cong_window_size <<endl;
-                        }
-                        else // congestion avoidance case
-                        {
-                            cong_window_size +=  ((1/(cong_window_size/1024)) * 1024);
-                            if(cong_window_size > MAX_CONGESTION_WINDOW)
-                                cong_window_size = MAX_CONGESTION_WINDOW;
-                            cout <<"Updated congestion window size is "<<cong_window_size <<endl;
-                        }
-                        
-                        // store ACK
-                        ack_no store_ack;
-                        store_ack.m_ack = ack_to_store;
-                        if (j == i) // actually received this ack
-                            store_ack.counter = 0;
-                        else // fake filling this ack
-                            store_ack.counter = -1;
-                        m_acknos.push_back(store_ack);
-                    }
-                    return;
-                }
-                else
-                // handles all 3 other cases: which all don't involve wrap around: don't need to update round counter
-                    // (ntohs(m_packets_s[window_begin].m_seq) < HALF_WAY_POINT && ack_32 <= HALF_WAY_POINT)
-                    // (ntohs(m_packets_s[window_begin].m_seq) >= HALF_WAY_POINT && ack_32 <= HALF_WAY_POINT)
-                    // (ntohs(m_packets_s[window_begin].m_seq) < HALF_WAY_POINT && ack_32 >= HALF_WAY_POINT)
-                {
-                    for (int j = window_begin; j <= i; j++) {
-                        uint16_t current_payload_length = strlen(m_packets_s[j].payload);
-                        if (current_payload_length >= 1024)
-                            current_payload_length = 1024;
-                        
-                        // generate ACK to store
-                        uint16_t cur_ack_16 = ntohs(m_packets_s[j].m_seq) + current_payload_length;
-                        int cur_ack_32 = cur_ack_16;
-                        int ack_to_store = cur_ack_32 + round_counter;
-                        
-                        // update congestion window stuff
-                        window_begin++;
-                        cur_cong_window -= current_payload_length;
-                        if (cong_window_size <= slow_start_threshold)
-                        {
-                            cong_window_size += 1024;
-                            if(cong_window_size > MAX_CONGESTION_WINDOW)
-                                cong_window_size = MAX_CONGESTION_WINDOW;
-                            cout <<"Updated congestion window size is "<<cong_window_size <<endl;
-                        }
-                        else // congestion avoidance case
-                        {
-                            cong_window_size +=  ((1/(cong_window_size/1024)) * 1024);
-                            if(cong_window_size > MAX_CONGESTION_WINDOW)
-                                cong_window_size = MAX_CONGESTION_WINDOW;
-                            cout <<"Updated congestion window size is "<<cong_window_size <<endl;
-                        }
-                        
-                        // store ACK
-                        ack_no store_ack;
-                        store_ack.m_ack = ack_to_store;
-                        if (j == i) // actually received this ack
-                            store_ack.counter = 0;
-                        else // fake filling this ack
-                            store_ack.counter = -1;
-                        m_acknos.push_back(store_ack);
-                    }
-                    return;
-                }
-                
-                // PREVIOUS CODE
-                /*
-                else // dealing with out of order ACK from previous round
-                {
-                    if(new_round)
-                    {
-                        if(ack_32 < HALF_WAY_POINT)
-                            cumulative_ack = ack_32 + round_counter;
-                        else
-                            cumulative_ack = ack_32 + round_counter - MAX_SEQ_NO;
-                    }
-                    else
-                    {
-                        if(ack_32 < HALF_WAY_POINT)
-                            cumulative_ack = ack_32 + round_counter + MAX_SEQ_NO;
-                        else
-                            cumulative_ack = ack_32 + round_counter;
-                    }
-                }
-                
-                if((m_acknos[window_begin].m_acknos % MAX_SEQ_NO < HALF_WAY_POINT) && new_round ==true)
-                    new_round = false;
-                
-                // window_begin was ACK'ed in order
                 if(i == window_begin)
                 {
                     window_begin++;
@@ -317,38 +186,21 @@ public:
                             cong_window_size = MAX_CONGESTION_WINDOW;
                         cout <<"Updated congestion window size is "<<cong_window_size <<endl;
                     }
-                    
-                    // store ack
-                    ack_no cur_ack;
-                    cur_ack.m_ack = cumulative_ack;
-                    cur_ack.counter = 0;
-                    m_acknos.push_back(cur_ack);
-                    return;
                 }
-                 
-                // FIXED: should handle ACK packet arrive out of order
-                    // PREVIOUSLY: timeout must happens, this packet get lost
-                else
+                else if(i <= window_pointer)
                 {
-                    uint16_t current_payload_length = strlen(m_packets_s[i].payload);
-                    if (current_payload_length >= 1024)
-                        current_payload_length = 1024;
-                    int ack_to_store = ntohs(m_packets_s[i].m_seq) + current_payload_length + round_counter;
-                    ack_no store_ack;
-                    store_ack.m_ack = ack_to_store;
-                    store_ack.counter = 0;
-                    m_acknos.push_back(store_ack);
-                    
-                    
+                    uint16_t offset = i - window_begin;
                     for (int j = window_begin; j <= i; j++)
                     {
-                        window_begin++;
+                        uint16_t j_length = strlen(m_packets_s[j].payload);
+                        if(j_length >= 1024)
+                            j_length = 1024;
+                        cur_cong_window -= j_length;
                         
-                        cur_cong_window -= i_length;
                         if (cong_window_size <= slow_start_threshold)
                         {
                             cong_window_size += 1024;
-                            if(cong_window_size > MAX_CONGESTION_WINDOW)
+                             if(cong_window_size > MAX_CONGESTION_WINDOW)
                                 cong_window_size = MAX_CONGESTION_WINDOW;
                             cout <<"Updated congestion window size is "<<cong_window_size <<endl;
                         }
@@ -360,62 +212,10 @@ public:
                             cout <<"Updated congestion window size is "<<cong_window_size <<endl;
                         }
                     }
-                    return;
+                    window_begin += offset;
                 }
-                 */
             }
         }
-        
-        // if you reach here, that means you are unexpected ACK
-        
-        // setting proper cumulative ACK
-        int unexpected_ack_32 = ackNo;
-        int cumulative_unexpected_ack;
-        if (ntohs(m_packets_s[window_begin].m_seq) < HALF_WAY_POINT && unexpected_ack_32 >= HALF_WAY_POINT) {
-            // case where you need to subtract one round (one MAX_SEQ_NO)
-            cumulative_unexpected_ack = unexpected_ack_32 + round_counter - MAX_SEQ_NO;
-        }
-        else {
-            // all 3 other cases should not need to subtract one round
-            cumulative_unexpected_ack = unexpected_ack_32 + round_counter;
-        }
-        
-        for (int k = 0; k < m_acknos.size(); k++) {
-            if (m_acknos[k].m_ack == cumulative_unexpected_ack)
-            {
-                // no need to store any more because we already filled, just update counter
-                m_acknos[k].counter++;
-                // add retransmission check
-                return;
-            }
-        }
-        
-        // PREVIOUS CODE
-        /*
-        int cumulative_unexpected_ack = ackNo + round_counter;
-        ack_no unexpected_store_ack;
-        unexpected_store_ack.m_ack = cumulative_unexpected_ack;
-        unexpected_store_ack.counter = 0;
-        vector<ack_no>::iterator it = m_acknos.begin();
-        int j = 0;
-        while (j < m_acknos.size())
-        {
-            if(m_acknos[j].m_ack > cumulative_unexpected_ack)
-            {
-                m_acknos.insert(it+j, unexpected_store_ack);
-                return;
-            }
-            else if(m_acknos[j].m_ack == cumulative_unexpected_ack)
-            {
-                m_acknos[j].counter++;
-               // window_begin = j;
-                return;
-            }
-            // add retransmission check
-            j++;
-        }
-         */
-
     }
     
     bool should_retransmit()
@@ -425,19 +225,17 @@ public:
 
     bool timeout()
     {
+        // set slow start threshold to half of current congestion window
         slow_start_threshold = 0.5 * cong_window_size;
-        if(slow_start_threshold <=1024)
-            slow_start_threshold = 1024;
+        // set congestion window back to 1 packet = 1024 bytes
         cong_window_size = 1024;
-        cur_cong_window = 1024;
-
-        //you need to reset window begin as well
-        
-        
-        m_packets_s.resize(window_begin+1);
-        window_end = window_begin+1;
+        // also need to reset current congestion window size: restart sending from packet that timed out
+        cur_cong_window = 0;
+        window_end = window_begin;
         window_pointer = window_begin;
         
+        
+        //seqNo_s
         no_timeouts++;
         return no_timeouts == MAX_NO_TIMEOUTS;
     }
@@ -482,7 +280,7 @@ public:
     bool hasNext()
     {
         cout << "window begin is " << window_begin <<endl;
-        bool result = (window_begin !=window_end) && (cur_cong_window != 0);
+        bool result = (window_begin != window_end) && (cur_cong_window != 0);
         if(result)
         {
             cout << "There is next "<<endl;
@@ -563,18 +361,11 @@ public:
         }
     }
     
-    int window_size()
-    {
-        return m_packets_s.size();
-    }
     
 private:
     vector<HeaderPacket> m_packets_s;
-    vector<ack_no> m_acknos;
     vector<exe_time> m_time;
-    int round_counter;
     uint16_t seqNo_s;
-    bool new_round;
     double cong_window_size; // in number of bytes
     double cur_cong_window; // number of bytes currently in congestion window
     uint16_t window_begin; // index of current beginning of window
@@ -731,7 +522,6 @@ int main(int argc, char* argv[])
                 resp_pkt_fin.m_flags = htons(FIN); //FIN flag
                 resp_pkt_fin.m_ack = htons(0);
                 //resp_pkt_fin.m_window = htons(mybuffer.getWindowSize());
-                
                 if(sendto(sockfd, &resp_pkt_fin, sizeof(resp_pkt_fin), 0, (struct sockaddr*) &clientAddr, clilen)<0)
                 {
                     cerr << "Sendto fails" << endl;
@@ -751,18 +541,16 @@ int main(int argc, char* argv[])
                 }
                 else
                 {
-                    myreader.truncate(mybuffer.window_size());
                     uint16_t seq = mybuffer.retcumulative();
                     HeaderPacket res_pkt = mybuffer.getPkt(seq);
                     res_pkt.m_seq = htons(seq);
-                    cout << "Sending data packet " << seq << " retransmit " <<endl;
                     if(sendto(sockfd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr*) &clientAddr, clilen)<0)
                     {
                         cerr << "Sendto fails" << endl;
                         return 1;
                     }
-                    FD_SET(sockfd, &readFds);
-                   // FD_SET(sockfd, &writeFds);
+                    FD_ZERO(&readFds);//clear the read set cuz we gonna retransmit again 
+                    FD_SET(sockfd, &writeFds);
                 }
             }
         }
@@ -875,7 +663,6 @@ int main(int argc, char* argv[])
                                 
                                 cout << "Send out data packet " << seq << endl;
                                 
-                                /*
                                 cout << "print out payload" <<endl;
                                 int p_size = strlen(res_pkt.payload);
                                 if(p_size >1024)
@@ -884,7 +671,7 @@ int main(int argc, char* argv[])
                                     cout << res_pkt.payload[i];
                                 }
                                 cout << endl;
-                                */
+                                
                                 if(sendto(sockfd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr*) &clientAddr, clilen)<0)
                                 {
                                     cerr << "Sendto fails" << endl;
