@@ -122,7 +122,6 @@ HeaderPacket FileReader::top()
     cout << "right now the position is "<<m_position <<endl;
 
     memcpy(segment.payload, &filecontent[m_position],readsize);
-    cout << "length is " << strlen(segment.payload) << endl;
     return segment;
 }
 
@@ -530,7 +529,6 @@ public:
     
     bool switch_to_read()
     {
-        cout << "Window end is "<<window_end << " and window pointer is "<<window_pointer <<endl;
         return window_pointer == window_end;
     }
     
@@ -866,14 +864,13 @@ int main(int argc, char* argv[])
                             case CONNECTED:
                             {
                                 uint16_t seq = mybuffer.getNextSeqNo();
-                                cout <<"state is connected"<<endl;
                                 res_pkt = mybuffer.getPkt(seq); // initial sequence number
                             
                                // clock_t t = clock();
                                 
                                 ///mybuffer.record_start(seq, clock());
                                 
-                                cout << "Send out data packet " << seq << endl;
+                                cout << "Sending data packet " << seq << endl;
                                 
                                 /*
                                 cout << "print out payload" <<endl;
@@ -885,6 +882,7 @@ int main(int argc, char* argv[])
                                 }
                                 cout << endl;
                                 */
+                                
                                 if(sendto(sockfd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr*) &clientAddr, clilen)<0)
                                 {
                                     cerr << "Sendto fails" << endl;

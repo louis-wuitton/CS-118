@@ -47,6 +47,7 @@ class ReceivingBuffer
             ini_seq = seqNo;
             round_counter = 0;
             new_round = false;
+            //sequence_expected = seqNo + 1;
         }
         uint16_t insert(uint16_t seqNo, HeaderPacket packet)
         {
@@ -59,14 +60,15 @@ class ReceivingBuffer
             
             if(m_segments.empty())
             {
-                new_packet.m_seq = seqNo;
-                m_segments.push_back(new_packet);
                 if(seqNo == ini_seq+1)
                 {
-                    if(strlen(new_packet.payload) < 1024)
-                        return seqNo + strlen(packet.payload);
-                    else
-                        return seqNo + 1024;
+                    // NEW CODE
+                    new_packet.m_seq = seqNo;
+                    m_segments.push_back(new_packet);
+                    uint16_t payload_size = strlen(new_packet.payload);
+                    if (payload_size > 1024)
+                        payload_size = 1024;
+                    return seqNo + payload_size;
                 }
                 else
                     return ini_seq + 1;
@@ -74,6 +76,74 @@ class ReceivingBuffer
             
             int seq_32 = seqNo;
             int cumuseq;
+            
+            // finding last in order sequence expected
+            int k;
+            uint16_t segsize_k;
+            uint16_t sequence_expected;
+            for (k = 0; k < m_segments.size()-1; k++) {
+                segsize_k = strlen(m_segments[k].payload);
+                if(segsize_k >= 1024)
+                    segsize_k = 1024;
+                if((m_segments[k].m_seq+segsize_k) != m_segments[k+1].m_seq)
+                    break;
+            }
+            segsize_k = strlen(m_segments[k].payload);
+            if(segsize_k >= 1024)
+                segsize_k = 1024;
+            sequence_expected = (m_segments[k].m_seq + segsize_k) % MAX_SEQ_NO; // equivalent to last_ack_sent
+            
+            // NEWER CODE
+            if (sequence_expected >= HALF_WAY_POINT && seq_32 < HALF_WAY_POINT)
+            {
+                // case where you possibly change round_counter and set new_round to true
+                if (new_round == false)
+                {
+                    new_round = true;
+                    round_counter += MAX_SEQ_NO;
+                    cumuseq = seq_32 + round_counter;
+                }
+                if (new_round == true)
+                {
+                    cumuseq = seq_32 + round_counter;
+                }
+            }
+            else if (sequence_expected >= HALF_WAY_POINT && seq_32 >= HALF_WAY_POINT)
+            {
+                if (new_round == false)
+                {
+                    // case where you possibly change round_counter
+                    if (sequence_expected == seqNo && (seqNo + pkt_size > MAX_SEQ_NO))
+                    {
+                        cumuseq = seq_32 + round_counter;
+                        round_counter += MAX_SEQ_NO;
+                    }
+                    else
+                    {
+                        cumuseq = seq_32 + round_counter;
+                    }
+                }
+                if (new_round == true)
+                {
+                    // case where you possibly set new_round to false
+                    if (sequence_expected == seqNo && (seqNo + pkt_size > MAX_SEQ_NO))
+                    {
+                        new_round = false;
+                        cumuseq = seq_32 + round_counter - MAX_SEQ_NO;
+                    }
+                    else
+                    {
+                        cumuseq = seq_32 + round_counter - MAX_SEQ_NO;
+                    }
+                }
+            }
+            else // all other cases should be here: don't need to update round_counter or new_round
+            {
+                cumuseq = seq_32 + round_counter;
+            }
+            
+            /*
+            // OLDER CODE
             if(seq_32 + pkt_size >= MAX_SEQ_NO && (new_round == false))
             {
                 new_round = true;
@@ -97,13 +167,16 @@ class ReceivingBuffer
                     }
                     else
                     {
-                        if(seq_32 < HALF_WAY_POINT)
-                            cumuseq = seq_32 + round_counter + MAX_SEQ_NO;
-                        else
+                        // if(seq_32 < HALF_WAY_POINT)
+                        //    cumuseq = seq_32 + round_counter;
+                        //else
+             
                             cumuseq = seq_32 + round_counter;
                     }
                 }
-            }
+            }*/
+            
+            cout << "Cumulative sequence number is " << cumuseq <<endl;
             new_packet.m_seq = cumuseq;
             
             vector<received_packet>::iterator it = m_segments.begin();
@@ -117,13 +190,7 @@ class ReceivingBuffer
                     break;
                 }
                 else if(m_segments[i].m_seq == cumuseq)
-                {
-                    uint16_t segsize = strlen(m_segments[i].payload);
-                    if(segsize >= 1024)
-                        segsize = 1024;
-                    return (m_segments[i].m_seq+segsize) % MAX_SEQ_NO;
-                }
-                
+                    break;
                 i++;
             }
             if(i == m_segments.size())
@@ -141,12 +208,20 @@ class ReceivingBuffer
                 if((m_segments[j].m_seq+segsize) != m_segments[j+1].m_seq)
                     break;
             }
-            if((m_segments[j].m_seq % MAX_SEQ_NO < HALF_WAY_POINT) && new_round == true)
+            
+            /*
+            // OLDER CODE
+            if((m_segments[j].m_seq % MAX_SEQ_NO < HALF_WAY_POINT) && (new_round == true))
+            {
+                cout << "Change the new round back "<<endl;
                 new_round = false;
+            }
+             */
             
             segsize = strlen(m_segments[j].payload);
             if(segsize >= 1024)
                 segsize = 1024;
+            
             return (m_segments[j].m_seq + segsize) % MAX_SEQ_NO;
         }
         vector<received_packet> getSegments()
@@ -371,7 +446,6 @@ int main(int argc, char* argv[])
                             HeaderPacket req_pkt;
                             req_pkt.m_seq = htons(0x0);
                             memset(req_pkt.payload, '\0', sizeof(req_pkt.payload));
-                            cout <<"sending acks to packets" <<endl;
                             req_pkt.m_ack = htons(next_ack);
                             req_pkt.m_window = htons(RECV_WINDOW);
                             req_pkt.m_flags = htons(0x2);
@@ -387,7 +461,6 @@ int main(int argc, char* argv[])
                             //req_pkt.m_seq = htons(next_seq);
                             HeaderPacket req_pkt;
                             memset(req_pkt.payload, '\0', sizeof(req_pkt.payload));
-                            cout <<"sending ack to fin" <<endl;
                             req_pkt.m_seq = htons(0x0);
                             req_pkt.m_ack = htons(next_ack);
                             req_pkt.m_window = htons(RECV_WINDOW);
@@ -429,13 +502,29 @@ int main(int argc, char* argv[])
         file.open ("received.data",ofstream::out | ofstream::app | ofstream::binary );
         vector<received_packet> segment = recv_buffer.getSegments();
         //print out content
-        for (int i = 0; i < segment.size(); i++) {
-            uint16_t write_size = strlen(segment[i].payload);
+        uint16_t write_size;
+        int i;
+        for (i = 0; i < segment.size()-1; i++) {
+            write_size = strlen(segment[i].payload);
             if (write_size >= 1024) {
                 write_size = 1024;
             }
-            file.write(&segment[i].payload[0], write_size);
+            cout << "i equals to " << i <<endl;
+            cout << "Sequence number for i is "<< segment[i].m_seq<<endl;
+            
+            if(segment[i].m_seq + write_size != segment[i+1].m_seq)
+            {
+                cout << "MISMATCH HAPPENS" <<endl;
+                cout << "Sequence number for i+1 is " << segment[i+1].m_seq <<endl;
+            }
+            else
+                file.write(&segment[i].payload[0], write_size);
         }
+        write_size = strlen(segment[i].payload);
+        if (write_size >= 1024) {
+            write_size = 1024;
+        }
+        file.write(&segment[i].payload[0], write_size);
         file.close();
     }
 }
