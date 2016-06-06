@@ -47,6 +47,7 @@ class ReceivingBuffer
             ini_seq = seqNo;
             round_counter = 0;
             new_round = false;
+            just_received_border = false;
             //sequence_expected = seqNo + 1;
         }
         uint16_t insert(uint16_t seqNo, HeaderPacket packet)
@@ -94,13 +95,20 @@ class ReceivingBuffer
             sequence_expected = (m_segments[k].m_seq + segsize_k) % MAX_SEQ_NO; // equivalent to last_ack_sent
             
             // NEWER CODE
+            
+            cout << "Sequence_expected is " << sequence_expected <<endl;
+            
             if (sequence_expected >= HALF_WAY_POINT && seq_32 < HALF_WAY_POINT)
             {
                 // case where you possibly change round_counter and set new_round to true
                 if (new_round == false)
                 {
                     new_round = true;
-                    round_counter += MAX_SEQ_NO;
+                    if (just_received_border == false)
+                    {
+                        just_received_border = true;
+                        round_counter += MAX_SEQ_NO;
+                    }
                     cumuseq = seq_32 + round_counter;
                 }
                 if (new_round == true)
@@ -113,10 +121,16 @@ class ReceivingBuffer
                 if (new_round == false)
                 {
                     // case where you possibly change round_counter
-                    if (sequence_expected == seqNo && (seqNo + pkt_size > MAX_SEQ_NO))
+                    // removed sequence_expected = seqNo
+                    if (seq_32 + pkt_size > MAX_SEQ_NO)
                     {
+                        new_round = true;
                         cumuseq = seq_32 + round_counter;
-                        round_counter += MAX_SEQ_NO;
+                        if (just_received_border == false)
+                        {
+                            just_received_border = true;
+                            round_counter += MAX_SEQ_NO;
+                        }
                     }
                     else
                     {
@@ -137,44 +151,19 @@ class ReceivingBuffer
                     }
                 }
             }
+            else if (sequence_expected < HALF_WAY_POINT && seq_32 < HALF_WAY_POINT)
+            {
+                if (new_round == true)
+                {
+                    new_round = false;
+                }
+                just_received_border = false;
+                cumuseq = seq_32 + round_counter;
+            }
             else // all other cases should be here: don't need to update round_counter or new_round
             {
                 cumuseq = seq_32 + round_counter;
             }
-            
-            /*
-            // OLDER CODE
-            if(seq_32 + pkt_size >= MAX_SEQ_NO && (new_round == false))
-            {
-                new_round = true;
-                cumuseq = seq_32 + round_counter;
-                round_counter += MAX_SEQ_NO;
-            }
-            else
-            {
-                if(new_round)
-                {
-                    if(seq_32 < HALF_WAY_POINT)
-                        cumuseq = seq_32 + round_counter;
-                    else
-                        cumuseq = seq_32 + round_counter - MAX_SEQ_NO;
-                }
-                else
-                {
-                    if(round_counter == 0)
-                    {
-                        cumuseq = seq_32;
-                    }
-                    else
-                    {
-                        // if(seq_32 < HALF_WAY_POINT)
-                        //    cumuseq = seq_32 + round_counter;
-                        //else
-             
-                            cumuseq = seq_32 + round_counter;
-                    }
-                }
-            }*/
             
             cout << "Cumulative sequence number is " << cumuseq <<endl;
             new_packet.m_seq = cumuseq;
@@ -209,15 +198,6 @@ class ReceivingBuffer
                     break;
             }
             
-            /*
-            // OLDER CODE
-            if((m_segments[j].m_seq % MAX_SEQ_NO < HALF_WAY_POINT) && (new_round == true))
-            {
-                cout << "Change the new round back "<<endl;
-                new_round = false;
-            }
-             */
-            
             segsize = strlen(m_segments[j].payload);
             if(segsize >= 1024)
                 segsize = 1024;
@@ -231,6 +211,7 @@ class ReceivingBuffer
     private:
     vector<received_packet> m_segments;
     bool new_round;
+    bool just_received_border;
     int round_counter;
     int ini_seq;
 };
