@@ -688,24 +688,9 @@ int main(int argc, char* argv[])
                                 }
                                 else if (state == CONNECTED)
                                 {
+                                    cout << "Receiveing ACK packet "<< ntohs(req_pkt.m_ack)<<endl;
                                     mybuffer.ack(ntohs(req_pkt.m_ack));
                                 
-                                /*
-                                clock_t end = clock();
-                                //reset the timeout
-                                double sampleRTT = mybuffer.get_duration(ntohs(req_pkt.m_ack), end);
-                                //now update the waiting time
-                                
-                                double difference = sampleRTT - sRTT;
-                                sRTT = sRTT + 0.125 * (difference);
-                                devRtt = devRtt + 0.25 * (abs(difference) - devRtt);
-                                double ret_to = sRTT + 4* devRtt;
-                                
-                                double intpart, fracpart;
-                                fracpart = modf(ret_to, &intpart);
-                                tv.tv_sec = (time_t) intpart;
-                                tv.tv_usec = (time_t) 1000000*fracpart;
-                                */
                                     while(myreader.hasMore() && mybuffer.hasSpace(strlen(myreader.top().payload)))
                                     {
                                         cout << "let's do some insert" <<endl;

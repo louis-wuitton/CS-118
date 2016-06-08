@@ -42,6 +42,7 @@
 #define CONNECTED 32
 #define SENT_FIN 33
 #define GET_FIN 35
+#define RETRANSMIT 36
 
 #define MAX_SEQ_NO 30720
 #define MAX_CONGESTION_WINDOW 15360
@@ -305,9 +306,9 @@ public:
             if (m_acknos[k].m_ack == cumulative_unexpected_ack)
             {
                 m_acknos[k].counter++;
-                if (m_ackNOS[k].counter == 3) {
+                if (m_acknos[k].counter == 3) {
                     should_retransmit = true;
-                    m_ackNOS[k].counter == 0;
+                    m_acknos[k].counter == 0;
                 }
                 return;
             }
@@ -634,6 +635,7 @@ int main(int argc, char* argv[])
                  FD_SET(sockfd, &readFds);
                 
             }
+            
             else if (state == CONNECTED)
             {
                 if(mybuffer.timeout())
@@ -665,6 +667,7 @@ int main(int argc, char* argv[])
                 close(sockfd);
                 break;
             }
+            
         }
         else
         {
@@ -704,7 +707,7 @@ int main(int argc, char* argv[])
                                 else if (state == CONNECTED)
                                 {
                                     mybuffer.ack(ntohs(req_pkt.m_ack));
-                                
+                                    cout << "Receiveing ACK packet "<< ntohs(req_pkt.m_ack)<<endl;
                                 /*
                                 clock_t end = clock();
                                 //reset the timeout
@@ -723,12 +726,13 @@ int main(int argc, char* argv[])
                                 */
                                     if (mybuffer.should_ret())
                                     {
-                                        cout << "Doing fast retransmit " <endl;
+                                        cout << "Doing fast retransmit " <<endl;
                                         state = RETRANSMIT;
                                         FD_CLR(fd, &readFds);
                                         FD_SET(fd, &writeFds);
                                     }
-                                    else {
+                                    else
+                                    {
                                         while(myreader.hasMore() && mybuffer.hasSpace(strlen(myreader.top().payload)))
                                         {
                                             cout << "let's do some insert" <<endl;
@@ -774,15 +778,11 @@ int main(int argc, char* argv[])
                 
                 else if(FD_ISSET(fd, &writeFds)) // writing, sendto cases
                 {
-                        cout <<"Do some write" <<endl;
-
                         HeaderPacket res_pkt;
                         switch(state)
                         {
                             case RETRANSMIT:
                             {
-                                uint16_t seq = mybuffer.getNextSeqNo();
-                                state = CONNECTED;
                                 uint16_t seq = mybuffer.retcumulative();
                                 HeaderPacket res_pkt = mybuffer.getPkt(seq);
                                 res_pkt.m_seq = htons(seq);
@@ -794,6 +794,7 @@ int main(int argc, char* argv[])
                                     return 1;
                                 }
                                 mybuffer.reset_ret();
+                                state = CONNECTED;
                                 FD_CLR(fd, &writeFds);
                                 FD_SET(fd, &readFds);
                                 break;
