@@ -24,13 +24,11 @@
 //this one implement advanced version
 
 //defining flags and useful numbers
-#define ACK 0x4
-#define SYN 0x2
+#define SYN 0x4
+#define ACK 0x2
 #define FIN 0x1
 #define SYNACK 0x6
-#define FINACK 0x5
-#define PACKET 0x0
-
+#define FINACK 0x3
 #define MAX_NO_TIMEOUTS 6
 
 //#define MAX_PACKET_SIZE 1024
@@ -41,7 +39,6 @@
 #define SYNACK_SENT 31
 #define CONNECTED 32
 #define SENT_FIN 33
-#define GET_FIN 35
 
 #define MAX_SEQ_NO 30720
 #define MAX_CONGESTION_WINDOW 15360
@@ -558,6 +555,8 @@ int main(int argc, char* argv[])
     FileReader myreader;
     myreader.openfile(argv[2]);
     
+    bool finish = false;
+    
     
     double sRTT = 3;
     double devRtt = 3;
@@ -576,6 +575,12 @@ int main(int argc, char* argv[])
         
         tv.tv_sec = 0;
         tv.tv_usec = 500000;
+        if(finish)
+        {
+            cout << "Time to close the connection"<<endl;
+            //close(sockfd);
+            break;
+        }
 
         if ((nReadyFds = select(maxSockfd+1, &readFds, &writeFds, &errFds, &tv)) == -1) {
             perror("select");
@@ -603,9 +608,6 @@ int main(int argc, char* argv[])
             else if (state == SENT_FIN)
             {
                 HeaderPacket resp_pkt_fin;
-                uint16_t seq = mybuffer.retcumulative();
-                resp_pkt_fin.m_seq = htons(seq);
-                cout << "Send out FIN packet " << seq << " Retransmit" <<endl;
                 resp_pkt_fin.m_seq = htons(mybuffer.getNextSeqNo());
                 resp_pkt_fin.m_flags = htons(FIN); //FIN flag
                 resp_pkt_fin.m_ack = htons(0);
@@ -644,12 +646,6 @@ int main(int argc, char* argv[])
                     FD_SET(sockfd, &readFds);
                 }
             }
-            else if (state == GET_FIN)
-            {
-                cout << "Time to close the connection" << endl;
-                close(sockfd);
-                break;
-            }
         }
         else
         {
@@ -666,29 +662,29 @@ int main(int argc, char* argv[])
                     {
                         switch(ntohs(req_pkt.m_flags))
                         {
+                            case SYNACK:
+                            {
+                                cout << "Receiveing SYNACK packet "<< ntohs(req_pkt.m_ack)<<endl;
+                                mybuffer.setInitSeq(ntohs(req_pkt.m_ack));
+                                if(myreader.hasMore())
+                                {
+                                    
+                                    mybuffer.insert(myreader.top());
+                                    myreader.pop();
+                                }
+                                else
+                                {
+                                    cout <<"nomore"<<endl;
+                                }
+                                state = CONNECTED;
+                                FD_CLR(fd, &readFds);
+                                FD_SET(fd, &writeFds);
+                                break;
+                            }
                             case ACK:
                             {
-                                if(state == SYNACK_SENT)
-                                {
-                                    cout << "Receiveing SYNACK packet "<< ntohs(req_pkt.m_ack)<<endl;
-                                    mybuffer.setInitSeq(ntohs(req_pkt.m_ack));
-                                    if(myreader.hasMore())
-                                    {
-                                        
-                                        mybuffer.insert(myreader.top());
-                                        myreader.pop();
-                                    }
-                                    else
-                                    {
-                                        cout <<"nomore"<<endl;
-                                    }
-                                    state = CONNECTED;
-                                    FD_CLR(fd, &readFds);
-                                    FD_SET(fd, &writeFds);
-                                }
-                                else if (state == CONNECTED)
-                                {
-                                    mybuffer.ack(ntohs(req_pkt.m_ack));
+                                cout << "Receiving ACK packet "<< ntohs(req_pkt.m_ack)<<endl;
+                                mybuffer.ack(ntohs(req_pkt.m_ack));
                                 
                                 /*
                                 clock_t end = clock();
@@ -706,40 +702,33 @@ int main(int argc, char* argv[])
                                 tv.tv_sec = (time_t) intpart;
                                 tv.tv_usec = (time_t) 1000000*fracpart;
                                 */
-                                    while(myreader.hasMore() && mybuffer.hasSpace(strlen(myreader.top().payload)))
-                                    {
-                                        cout << "let's do some insert" <<endl;
-                                        mybuffer.insert(myreader.top());
-                                        myreader.pop();
-                                    }
-                                    if(!mybuffer.hasNext())
-                                    {
-                                        cout <<"change state to finish"<<endl;
-                                        state = SENT_FIN;
-                                    }
+                                while(myreader.hasMore() && mybuffer.hasSpace(strlen(myreader.top().payload)))
+                                {
+                                    cout << "let's do some insert" <<endl;
+                                    mybuffer.insert(myreader.top());
+                                    myreader.pop();
+                                }
+                                if(!mybuffer.hasNext())
+                                {
+                                    cout <<"change state to finish"<<endl;
+                                    state = SENT_FIN;
+                                }
                             
-                                    //don't do write until you ack all the packets you just sent out
-                                    if(mybuffer.switch_to_write())
-                                    {
-                                        cout << "SWITCH TO WRITE STATE " <<endl;
-                                        FD_CLR(fd, &readFds);
-                                        FD_SET(fd, &writeFds);
-                                    }
+                                //don't do write until you ack all the packets you just sent out
+                                if(mybuffer.switch_to_write())
+                                {
+                                    cout << "SWITCH TO WRITE STATE " <<endl;
+                                    FD_CLR(fd, &readFds);
+                                    FD_SET(fd, &writeFds);
                                 }
                                 break;
                             }
                             case FINACK:
                             {
                                 cout << "Receiving FINACK packet "<< ntohs(req_pkt.m_ack)<<endl;
-                                FD_SET(fd, &readFds);
-                                break;
-                            }
-                            case FIN:
-                            {
-                                cout << "Receiving FIN packet " << ntohs(req_pkt.m_ack) <<endl;
-                                state = GET_FIN;
+                                finish = true;
                                 FD_CLR(fd, &readFds);
-                                FD_SET(fd, &writeFds);
+                                break;
                             }
                             default:
                                 break;
@@ -777,7 +766,7 @@ int main(int argc, char* argv[])
                                 cout << endl;
                                 */
                                 
-                                res_pkt.m_flags = htons(PACKET);
+                                res_pkt.m_flags = htons(0x0);
                                 if(sendto(sockfd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr*) &clientAddr, clilen)<0)
                                 {
                                     cerr << "Sendto fails" << endl;
@@ -808,22 +797,6 @@ int main(int argc, char* argv[])
                                 FD_SET(fd, &readFds);
                                 break;
                             }
-                            case GET_FIN:
-                            {
-                                uint16_t seq = mybuffer.retcumulative();
-                                res_pkt.m_seq = htons(seq + 1);
-                                res_pkt.m_ack = htons(0);
-                                res_pkt.m_flags = htons(FINACK);
-                                cout << "Sending FINACK packet " << seq +1  << endl;
-                                if(sendto(sockfd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr*) &clientAddr, clilen)<0)
-                                {
-                                    cerr << "Sendto fails" << endl;
-                                    return 1;
-                                }
-                                FD_CLR(fd, &writeFds);
-                                FD_SET(fd, &readFds);
-                                break;
-                            }
                         }
                             
                     }
@@ -831,5 +804,5 @@ int main(int argc, char* argv[])
         }
      }
     
-   // close(sockfd);
+    close(sockfd);
     }

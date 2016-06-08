@@ -155,6 +155,7 @@ public:
         repeat_count = 0;
         is_timeout = false;
         timeout_pointer = 0;
+        should_retransmit = false;
     }
     void setInitSeq(uint16_t seqNo)
     {
@@ -304,6 +305,10 @@ public:
             if (m_acknos[k].m_ack == cumulative_unexpected_ack)
             {
                 m_acknos[k].counter++;
+                if (m_ackNOS[k].counter == 3) {
+                    should_retransmit = true;
+                    m_ackNOS[k].counter == 0;
+                }
                 return;
             }
         }
@@ -311,10 +316,6 @@ public:
 
     }
     
-    bool should_retransmit()
-    {
-        return repeat_count == 3;
-    }
 
     bool timeout()
     {
@@ -450,6 +451,18 @@ public:
         return m_packets_s.size();
     }
     
+    
+    bool should_ret()
+    {
+        return should_retransmit;
+    }
+    
+    
+    bool reset_ret()
+    {
+        should_retransmit = false;
+    }
+    
 private:
     vector<HeaderPacket> m_packets_s;
     vector<ack_no> m_acknos;
@@ -457,6 +470,7 @@ private:
     int round_counter;
     uint16_t seqNo_s;
     bool new_round;
+    bool should_retransmit;
     bool is_timeout;
     double cong_window_size; // in number of bytes
     double cur_cong_window; // number of bytes currently in congestion window
@@ -467,6 +481,7 @@ private:
     uint16_t no_timeouts; // number of timeouts
     double slow_start_threshold;
     uint16_t repeat_count;
+
 };
 
 int main(int argc, char* argv[])
@@ -706,24 +721,33 @@ int main(int argc, char* argv[])
                                 tv.tv_sec = (time_t) intpart;
                                 tv.tv_usec = (time_t) 1000000*fracpart;
                                 */
-                                    while(myreader.hasMore() && mybuffer.hasSpace(strlen(myreader.top().payload)))
+                                    if (mybuffer.should_ret())
                                     {
-                                        cout << "let's do some insert" <<endl;
-                                        mybuffer.insert(myreader.top());
-                                        myreader.pop();
-                                    }
-                                    if(!mybuffer.hasNext())
-                                    {
-                                        cout <<"change state to finish"<<endl;
-                                        state = SENT_FIN;
-                                    }
-                            
-                                    //don't do write until you ack all the packets you just sent out
-                                    if(mybuffer.switch_to_write())
-                                    {
-                                        cout << "SWITCH TO WRITE STATE " <<endl;
+                                        cout << "Doing fast retransmit " <endl;
+                                        state = RETRANSMIT;
                                         FD_CLR(fd, &readFds);
                                         FD_SET(fd, &writeFds);
+                                    }
+                                    else {
+                                        while(myreader.hasMore() && mybuffer.hasSpace(strlen(myreader.top().payload)))
+                                        {
+                                            cout << "let's do some insert" <<endl;
+                                            mybuffer.insert(myreader.top());
+                                            myreader.pop();
+                                        }
+                                        if(!mybuffer.hasNext())
+                                        {
+                                            cout <<"change state to finish"<<endl;
+                                            state = SENT_FIN;
+                                        }
+                                    
+                                        //don't do write until you ack all the packets you just sent out
+                                        if(mybuffer.switch_to_write())
+                                        {
+                                            cout << "SWITCH TO WRITE STATE " <<endl;
+                                            FD_CLR(fd, &readFds);
+                                            FD_SET(fd, &writeFds);
+                                        }
                                     }
                                 }
                                 break;
@@ -755,6 +779,25 @@ int main(int argc, char* argv[])
                         HeaderPacket res_pkt;
                         switch(state)
                         {
+                            case RETRANSMIT:
+                            {
+                                uint16_t seq = mybuffer.getNextSeqNo();
+                                state = CONNECTED;
+                                uint16_t seq = mybuffer.retcumulative();
+                                HeaderPacket res_pkt = mybuffer.getPkt(seq);
+                                res_pkt.m_seq = htons(seq);
+                                res_pkt.m_flags = htons(0x0);
+                                cout << "Sending data packet " << seq << " retransmit " <<endl;
+                                if(sendto(sockfd, &res_pkt, sizeof(res_pkt), 0, (struct sockaddr*) &clientAddr, clilen)<0)
+                                {
+                                    cerr << "Sendto fails" << endl;
+                                    return 1;
+                                }
+                                mybuffer.reset_ret();
+                                FD_CLR(fd, &writeFds);
+                                FD_SET(fd, &readFds);
+                                break;
+                            }
                             case CONNECTED:
                             {
                                 uint16_t seq = mybuffer.getNextSeqNo();

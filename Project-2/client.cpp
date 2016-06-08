@@ -18,10 +18,14 @@
 #include "packet.h"
 
 
+//flags
 #define SYNACK 0x6
+#define ACK 0x4
 #define PACKET 0x0
 #define FIN 0x1
-#define FINACK 0x3
+#define FINACK 0x5
+#define SYN 0x2
+
 #define RECV_WINDOW 30720
 #define MAX_SEQ_NO 30720
 #define HALF_WAY_POINT 15360
@@ -29,6 +33,7 @@
 #define SENDSYN 32
 #define SYNACK_RECEIVED 33
 #define FIN_RECEIVED 34
+#define SENDFIN 35
 
 using namespace std;
 
@@ -305,7 +310,7 @@ int main(int argc, char* argv[])
     HeaderPacket req_pkt;
     req_pkt.m_seq = htons(0);
     req_pkt.m_ack = htons(0);
-    req_pkt.m_flags = htons(0x4);
+    req_pkt.m_flags = htons(SYN);
     req_pkt.m_window = htons(RECV_WINDOW);
     if(sendto(sockfd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr, serlen) <0)
     {
@@ -326,10 +331,12 @@ int main(int argc, char* argv[])
             tv.tv_sec = 30;
             tv.tv_usec = 0;
         }
-        else if(state == FIN_RECEIVED)
+        else if(state == SENDFIN)
         {
-            tv.tv_sec = 3;
-            tv.tv_usec = 0;
+            cout << "Client will close connection " <<endl;
+            FD_CLR(sockfd, &readFds);
+            close(sockfd);
+            break;
         }
         if(!FD_ISSET(sockfd, &watchFds))
             FD_SET(sockfd, &watchFds);
@@ -340,13 +347,14 @@ int main(int argc, char* argv[])
         }
         if(nReadyFds == 0)
         {
-            cout << "TIMEOUT HAPPENS TO THE CLIENT" <<endl;
-            if(state == FIN_RECEIVED || state ==SYNACK_RECEIVED)
+            /*
+            if(state == SENDFIN || state ==SYNACK_RECEIVED)
             {
                 FD_CLR(sockfd, &readFds);
                 close(sockfd);
                 break;
             }
+             */
             if (state == SENDSYN)
             {
                 HeaderPacket req_pkt;
@@ -373,10 +381,10 @@ int main(int argc, char* argv[])
                         cerr<<"Failure in recvfrom" <<endl;
                         return 1;
                     }
-                    cout << "Receiving data packet " << ntohs(res_pkt.m_seq)<<endl;
                     uint16_t flagcheck = ntohs(res_pkt.m_flags);
                     switch (flagcheck) {
                         case SYNACK:{
+                             cout << "Receiving SYNACK packet " << ntohs(res_pkt.m_seq)<<endl;
                             next_ack = ntohs(res_pkt.m_seq)+1;
                             recv_buffer.setInitSeq(ntohs(res_pkt.m_seq));
                             writestate = SYNACK;
@@ -384,12 +392,14 @@ int main(int argc, char* argv[])
                         }
                         case PACKET:{
                             //next_seq = ntohs(res_pkt.m_ack);
+                            cout << "Receiving data packet " << ntohs(res_pkt.m_seq)<<endl;
                             next_ack = recv_buffer.insert(ntohs(res_pkt.m_seq), res_pkt);
                             writestate = PACKET;
                             break;
                         }
                         case FIN:{
                             //next_seq = ntohs(res_pkt.m_ack);
+                            cout << "Receiving FIN packet " << ntohs(res_pkt.m_seq)<<endl;
                             next_ack = ntohs(res_pkt.m_seq);
                             writestate = FIN;
                             break;
@@ -406,65 +416,89 @@ int main(int argc, char* argv[])
                 }
                 else if(FD_ISSET(fd, &writeFds))
                 {
-                    switch (writestate) {
-                        case SYNACK:{
-                            HeaderPacket req_pkt;
-                            memset(req_pkt.payload, '\0', sizeof(req_pkt.payload));
-                            req_pkt.m_seq = htons(0x0);
-                            req_pkt.m_ack = htons(next_ack);
-                            req_pkt.m_flags = htons(SYNACK);
-                            req_pkt.m_window = htons(RECV_WINDOW);
-                            cout <<"Sending ACK packet " << ntohs(req_pkt.m_ack) <<endl;
-                            if(sendto(fd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr, serlen)<0)
-                            {
-                                cerr<<"Sendto fails" <<endl;
-                                return 1;
-                            }
-                            state = SYNACK_RECEIVED;
-                            break;
-                        }
-                        case PACKET:{
-                            HeaderPacket req_pkt;
-                            req_pkt.m_seq = htons(0x0);
-                            memset(req_pkt.payload, '\0', sizeof(req_pkt.payload));
-                            req_pkt.m_ack = htons(next_ack);
-                            req_pkt.m_window = htons(RECV_WINDOW);
-                            req_pkt.m_flags = htons(0x2);
-                            cout <<"Sending ACK packet " << ntohs(req_pkt.m_ack) <<endl;
-                            if(sendto(fd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr, serlen)<0)
-                            {
-                                cerr<<"Sendto fails" <<endl;
-                                return 1;
-                            }
-                            break;
-                        }
-                        case FIN: {
-                            //req_pkt.m_seq = htons(next_seq);
-                            HeaderPacket req_pkt;
-                            memset(req_pkt.payload, '\0', sizeof(req_pkt.payload));
-                            req_pkt.m_seq = htons(0x0);
-                            req_pkt.m_ack = htons(next_ack);
-                            req_pkt.m_window = htons(RECV_WINDOW);
-                            req_pkt.m_flags = htons(FINACK);
-                            //finish = true;
-                            state = FIN_RECEIVED;
-                            cout <<"Sending ACK packet " << ntohs(req_pkt.m_ack) <<endl;
-                            if(sendto(fd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr, serlen)<0)
-                            {
-                                cerr<<"Sendto fails" <<endl;
-                                return 1;
-                            }
-                            break;
-                        }
-                        default:
+                    if (state == FIN_RECEIVED)
+                    {
+                        HeaderPacket req_pkt;
+                        memset(req_pkt.payload, '\0', sizeof(req_pkt.payload));
+                        req_pkt.m_seq = htons(0x0);
+                        //next_ack++;
+                        req_pkt.m_ack = htons(next_ack);
+                        req_pkt.m_window = htons(RECV_WINDOW);
+                        req_pkt.m_flags = htons(FIN);
+                         cout <<"Sending FIN packet " << ntohs(req_pkt.m_ack) <<endl;
+                        if(sendto(fd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr, serlen)<0)
                         {
-                            cerr<<"This flag is invalid" <<endl;
+                            cerr<<"Sendto fails" <<endl;
                             return 1;
                         }
-                    }
+                        state = SENDFIN;
                         FD_CLR(fd, &writeFds);
-                        FD_SET(fd, &readFds);
-                    
+                        FD_CLR(fd, &readFds);
+                    }
+                    else
+                    {
+                        switch (writestate) {
+                            case SYNACK:{
+                                HeaderPacket req_pkt;
+                                memset(req_pkt.payload, '\0', sizeof(req_pkt.payload));
+                                req_pkt.m_seq = htons(0x0);
+                                req_pkt.m_ack = htons(next_ack);
+                                req_pkt.m_flags = htons(ACK);
+                                req_pkt.m_window = htons(RECV_WINDOW);
+                                cout <<"Sending ACK packet " << ntohs(req_pkt.m_ack) <<endl;
+                                if(sendto(fd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr, serlen)<0)
+                                {
+                                    cerr<<"Sendto fails" <<endl;
+                                    return 1;
+                                }
+                                state = SYNACK_RECEIVED;
+                                FD_CLR(fd, &writeFds);
+                                FD_SET(fd, &readFds);
+                                break;
+                            }
+                            case PACKET:{
+                                HeaderPacket req_pkt;
+                                req_pkt.m_seq = htons(0x0);
+                                memset(req_pkt.payload, '\0', sizeof(req_pkt.payload));
+                                req_pkt.m_ack = htons(next_ack);
+                                req_pkt.m_window = htons(RECV_WINDOW);
+                                req_pkt.m_flags = htons(ACK);
+                                cout <<"Sending ACK packet " << ntohs(req_pkt.m_ack) <<endl;
+                                if(sendto(fd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr, serlen)<0)
+                                {
+                                    cerr<<"Sendto fails" <<endl;
+                                    return 1;
+                                }
+                                FD_CLR(fd, &writeFds);
+                                FD_SET(fd, &readFds);
+                                break;
+                            }
+                            case FIN: {
+                                HeaderPacket req_pkt;
+                                memset(req_pkt.payload, '\0', sizeof(req_pkt.payload));
+                                req_pkt.m_seq = htons(0x0);
+                                //next_ack++;
+                                req_pkt.m_ack = htons(next_ack);
+                                req_pkt.m_window = htons(RECV_WINDOW);
+                                req_pkt.m_flags = htons(FINACK);
+                                //finish = true;
+                                state = FIN_RECEIVED;
+                                cout <<"Sending FINACK packet " << ntohs(req_pkt.m_ack) <<endl;
+                                if(sendto(fd, &req_pkt, sizeof(req_pkt), 0, (struct sockaddr *)&servaddr, serlen)<0)
+                                {
+                                    cerr<<"Sendto fails" <<endl;
+                                    return 1;
+                                }
+                                //don't update the state
+                                break;
+                            }
+                            default:
+                            {
+                                cerr<<"This flag is invalid" <<endl;
+                                return 1;
+                            }
+                        }
+                    }
                 }
             }
             
